@@ -12,6 +12,7 @@
 #define M_PI 3.1415926535897932384626433832795
 
 namespace {
+
     constexpr float camera_fov = 70.0f;
     constexpr float camera_near_plane = 0.01f;
     constexpr float camera_far_plane = 100.0f;
@@ -19,7 +20,6 @@ namespace {
     float child_scale = 0.5f;
     float child_orbit_radius = 2.0f;
 
-    // Task 5
     bool animation_paused = false;
     float animation_direction = 1.0f; // 1.0 = forward, -1.0 = backward
     float saved_time = 0.0f;
@@ -59,9 +59,8 @@ namespace {
     VulkanBuffer vertex_buffer;
     VulkanBuffer index_buffer;
 
-    Vector model_position = {0.0f, 0.0f, 5.0f};
+    Vector model_position = {2.0f, 0.0f, 5.0f};
     float model_rotation;
-    Vector model_color = {0.5f, 1.0f, 0.7f};
 
     Matrix identity() {
         Matrix result{};
@@ -130,7 +129,7 @@ namespace {
         return result;
     }
 
-    Matrix multiply(const Matrix &a, const Matrix &b) {
+        Matrix multiply(const Matrix &a, const Matrix &b) {
         Matrix result{};
 
         for (int j = 0; j < 4; j++) {
@@ -342,7 +341,7 @@ namespace {
             VkPipelineRasterizationStateCreateInfo raster_info{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                 .polygonMode = VK_POLYGON_MODE_FILL,
-                .cullMode = VK_CULL_MODE_BACK_BIT,
+                .cullMode = VK_CULL_MODE_NONE,
                 .frontFace = VK_FRONT_FACE_CLOCKWISE,
                 .lineWidth = 1.0f,
             };
@@ -453,7 +452,6 @@ namespace {
             }
         }
 
-        // NOTE: Define pyramid vertices with gradient colors
         // (v0)------(v1)
         //  |  \       |
         //  |   `--,   |
@@ -461,18 +459,18 @@ namespace {
         // (v3)------(v2)
         //       (v4) - apex
         Vertex vertices[] = {
-            {{-1.0f, -1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}}, // v0 - red
-            {{1.0f, -1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}, // v1 - green
-            {{1.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, // v2 - blue
-            {{-1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}}, // v3 - yellow
-            {{0.0f, 0.0f, 1.5f}, {1.0f, 0.0f, 1.0f}} // v4 - apex (magenta)
+            {{-1.0f, -1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+            {{1.0f, -1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+            {{1.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+            {{-1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+            {{0.0f, 0.0f, 1.5f}, {1.0f, 0.0f, 1.0f}}
         };
 
         uint32_t indices[] = {
-            // NOTE: Base (two triangles)
+            // Base
             0, 1, 2,
             2, 3, 0,
-            // NOTE: Sides (four triangles)
+            // Sides
             0, 1, 4,
             1, 2, 4,
             2, 3, 4,
@@ -591,10 +589,12 @@ namespace {
                 camera_near_plane, camera_far_plane);
 
             // NOTE: Build hierarchy of transformations
-
+            std::vector<Matrix> matrix_stack;
+            matrix_stack.push_back(identity());
             // NOTE: 1. Transform entire system (topmost level of hierarchy)
             //          Rotates entire scene around world Z axis
             Matrix system_transform = rotation({0.0f, 0.0f, 1.0f}, system_rotation);
+            matrix_stack.push_back(multiply(matrix_stack.back(), system_transform));
 
             // NOTE: 2. Local transform of parent pyramid (static - only translation)
             Matrix parent_local_transform = translation(model_position);
@@ -602,7 +602,7 @@ namespace {
             parent_local_transform = multiply(parent_rotation_mat, parent_local_transform);
 
             // NOTE: World transform of parent: M_world = M_local * M_system
-            Matrix world_parent = multiply(parent_local_transform, system_transform);
+            Matrix world_parent = multiply(parent_local_transform, matrix_stack.back());
 
             // NOTE: Draw parent pyramid
             ShaderConstants parent_constants{
@@ -614,6 +614,8 @@ namespace {
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(ShaderConstants), &parent_constants);
             vkCmdDrawIndexed(cmd, 18, 1, 0, 0, 0);
+
+            matrix_stack.push_back(world_parent);
 
             // NOTE: 3. Local transform of child pyramid (relative to parent)
             //          First scale, then translate to orbit
@@ -633,19 +635,21 @@ namespace {
             // NOTE: Local transform: M_local = M_scale * M_orbit_translation
             Matrix child_local_transform = multiply(child_scale_mat, child_orbit_translation);
 
-            // NOTE: World transform of child: M_world_child = M_local_child * M_world_parent
-            Matrix world_child = multiply(child_local_transform, world_parent);
+            // NOTE: M_world_child = M_local_child * M_world_parent
+            Matrix world_child = multiply(child_local_transform, matrix_stack.back());
 
-            // NOTE: Draw child pyramid
             ShaderConstants child_constants{
                 .projection = proj,
                 .transform = world_child,
-                .color = {0.0f, 0.0f, 0.0f}, // NOTE: Not used (color from vertices)
+                .color = {0.0f, 0.0f, 0.0f},
             };
             vkCmdPushConstants(cmd, pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(ShaderConstants), &child_constants);
             vkCmdDrawIndexed(cmd, 18, 1, 0, 0, 0);
+
+            matrix_stack.pop_back();
+            matrix_stack.pop_back();
         }
 
         vkCmdEndRenderPass(cmd);

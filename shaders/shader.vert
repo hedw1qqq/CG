@@ -2,16 +2,15 @@
 
 // NOTE: Attributes must match the declaration of VkVertexInputAttribute array
 layout (location = 0) in vec3 v_position;
-layout (location = 1) in vec3 v_color;  // Добавлен атрибут цвета
+layout (location = 1) in vec3 v_color;
 
-// NOTE: Выходная переменная для fragment shader
 layout (location = 0) out vec3 frag_color;
 
 // NOTE: Must match declaration order of a C struct
 layout (push_constant, std430) uniform ShaderConstants {
     mat4 projection;
     mat4 transform;
-    vec3 color;  // Больше не используется, но оставляем для совместимости
+    vec3 color;  // not used, for compatibility
 };
 
 void main() {
@@ -20,5 +19,5 @@ void main() {
     vec4 projected = projection * transformed;
 
     gl_Position = projected;
-    frag_color = v_color;  // Передаем цвет для интерполяции
+    frag_color = v_color;
 }
