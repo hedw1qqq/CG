@@ -40,7 +40,7 @@ namespace {
     struct ShaderConstants {
         Matrix projection;
         Matrix transform;
-        Vector color; // для совместимости, не исп
+        //Vector color; // для совместимости, не исп
     };
 
     struct VulkanBuffer {
@@ -339,7 +339,7 @@ namespace {
             VkPipelineRasterizationStateCreateInfo raster_info{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                 .polygonMode = VK_POLYGON_MODE_FILL,
-                .cullMode = VK_CULL_MODE_NONE,
+                .cullMode = VK_CULL_MODE_BACK_BIT,
                 .frontFace = VK_FRONT_FACE_CLOCKWISE,
                 .lineWidth = 1.0f,
             };
@@ -605,7 +605,7 @@ namespace {
             ShaderConstants parent_constants{
                 .projection = proj,
                 .transform = world_parent,
-                .color = {0.0f, 0.0f, 0.0f}, // not used
+                //.color = {0.0f, 0.0f, 0.0f}, // not used
             };
 
             vkCmdPushConstants(cmd, pipeline_layout,
@@ -634,7 +634,7 @@ namespace {
             ShaderConstants child_constants{
                 .projection = proj,
                 .transform = world_child,
-                .color = {0.0f, 0.0f, 0.0f},
+                //.color = {0.0f, 0.0f, 0.0f},
             };
             vkCmdPushConstants(cmd, pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

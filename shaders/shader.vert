@@ -10,7 +10,7 @@ layout (location = 0) out vec3 frag_color;
 layout (push_constant, std430) uniform ShaderConstants {
     mat4 projection;
     mat4 transform;
-    vec3 color;  // not used, for compatibility
+    //vec3 color;  // not used, for compatibility
 };
 
 void main() {

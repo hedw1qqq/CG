@@ -9,7 +9,7 @@ layout (location = 0) out vec4 final_color;
 layout (push_constant, std430) uniform ShaderConstants {
     mat4 projection;
     mat4 transform;
-    vec3 color;
+    //vec3 color;
 };
 
 void main() {
