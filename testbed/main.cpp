@@ -22,7 +22,6 @@ namespace {
 
     bool animation_paused = false;
     float animation_direction = 1.0f; // 1.0 = forward, -1.0 = backward
-    float saved_time = 0.0f;
     float parent_tilt = 0.3f;
 
     struct Matrix {
@@ -520,22 +519,26 @@ namespace {
         ImGui::Text("Rotation: %.3f", system_rotation); // NOTE: Display only, not editable
         ImGui::End();
 
-        // NOTE: Animation code and other runtime variable updates go here
-        // NOTE: Update time with pause and direction control
-        static double last_time = 0.0;
+        static double last_time = time;
         double delta_time = time - last_time;
         last_time = time;
 
-        if (!animation_paused) {
-            saved_time += float(delta_time) * animation_direction;
-            model_rotation = saved_time;
+        static double total_time = 0.0;
 
-            // NOTE: Animate system rotation automatically (required by task)
-            system_rotation += float(delta_time) * 0.5f; // 0.5 rad/s speed
+        if (!animation_paused) {
+            total_time += delta_time * animation_direction;
         }
 
-        model_rotation = fmodf(model_rotation, 2.0f * M_PI);
-        system_rotation = fmodf(system_rotation, 2.0f * M_PI);
+        float animation_speed = 1.0f;
+        float system_rotation_speed = 0.5f;
+
+        model_rotation = float(total_time) * animation_speed;
+        system_rotation = float(total_time) * system_rotation_speed;
+
+        const double max_safe_time = 1000000.0;
+        if (fabs(total_time) > max_safe_time) {
+            total_time = fmod(total_time, max_safe_time);
+        }
     }
 
     void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
@@ -577,39 +580,35 @@ namespace {
             // NOTE: Use our graphics pipeline
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-            // NOTE: Bind vertex/index buffers (our pyramid)
+            // NOTE: Bind vertex/index buffers
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &offset);
             vkCmdBindIndexBuffer(cmd, index_buffer.buffer, offset, VK_INDEX_TYPE_UINT32);
 
-            // NOTE: Build projection matrix (remains the same for both pyramids)
+
             Matrix proj = projection(
                 camera_fov,
                 float(veekay::app.window_width) / float(veekay::app.window_height),
                 camera_near_plane, camera_far_plane);
 
-            // NOTE: Build hierarchy of transformations
             std::vector<Matrix> matrix_stack;
             matrix_stack.push_back(identity());
-            // NOTE: 1. Transform entire system (topmost level of hierarchy)
-            //          Rotates entire scene around world Z axis
+
             Matrix system_transform = rotation({0.0f, 0.0f, 1.0f}, system_rotation);
             matrix_stack.push_back(multiply(matrix_stack.back(), system_transform));
 
-            // NOTE: 2. Local transform of parent pyramid (static - only translation)
             Matrix parent_local_transform = translation(model_position);
             Matrix parent_rotation_mat = rotation({1.0f, 0.0f, 0.0f}, parent_tilt);
             parent_local_transform = multiply(parent_rotation_mat, parent_local_transform);
 
-            // NOTE: World transform of parent: M_world = M_local * M_system
             Matrix world_parent = multiply(parent_local_transform, matrix_stack.back());
 
-            // NOTE: Draw parent pyramid
             ShaderConstants parent_constants{
                 .projection = proj,
                 .transform = world_parent,
-                .color = {0.0f, 0.0f, 0.0f}, // NOTE: Not used (color from vertices)
+                .color = {0.0f, 0.0f, 0.0f}, // not used
             };
+
             vkCmdPushConstants(cmd, pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(ShaderConstants), &parent_constants);
@@ -617,25 +616,20 @@ namespace {
 
             matrix_stack.push_back(world_parent);
 
-            // NOTE: 3. Local transform of child pyramid (relative to parent)
-            //          First scale, then translate to orbit
             Matrix child_scale_mat = identity();
             child_scale_mat.m[0][0] = child_scale;
             child_scale_mat.m[1][1] = child_scale;
             child_scale_mat.m[2][2] = child_scale;
 
-            // NOTE: For orbit animation, use model_rotation (animated parameter)
-            float orbit_angle = model_rotation * 1.5f; // NOTE: Speed up orbit for visibility
+            float orbit_angle = model_rotation * 1.5f;
             Matrix child_orbit_translation = translation({
                 cosf(orbit_angle) * child_orbit_radius,
                 sinf(orbit_angle) * child_orbit_radius,
                 0.0f
             });
 
-            // NOTE: Local transform: M_local = M_scale * M_orbit_translation
             Matrix child_local_transform = multiply(child_scale_mat, child_orbit_translation);
 
-            // NOTE: M_world_child = M_local_child * M_world_parent
             Matrix world_child = multiply(child_local_transform, matrix_stack.back());
 
             ShaderConstants child_constants{
