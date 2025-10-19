@@ -12,7 +12,6 @@
 #define M_PI 3.1415926535897932384626433832795
 
 namespace {
-
     constexpr float camera_fov = 70.0f;
     constexpr float camera_near_plane = 0.01f;
     constexpr float camera_far_plane = 100.0f;
@@ -128,7 +127,7 @@ namespace {
         return result;
     }
 
-        Matrix multiply(const Matrix &a, const Matrix &b) {
+    Matrix multiply(const Matrix &a, const Matrix &b) {
         Matrix result{};
 
         for (int j = 0; j < 4; j++) {
