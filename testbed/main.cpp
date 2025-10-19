@@ -515,7 +515,7 @@ namespace {
 
         ImGui::Separator();
         ImGui::Text("System rotation:");
-        ImGui::Text("Rotation: %.3f", system_rotation); // NOTE: Display only, not editable
+        ImGui::Text("Rotation: %.3f", system_rotation);
         ImGui::End();
 
         static double last_time = time;
