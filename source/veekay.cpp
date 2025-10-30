@@ -667,16 +667,15 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		app_info.update(time);
 
 		ImGui::Render();
-
+        uint32_t swapchain_image_index = 0;
 		// NOTE: Wait until the previous frame finishes
 		vkWaitForFences(vk_device, 1, &vk_in_flight_fences[vk_current_frame], true, UINT64_MAX);
+        vkAcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX,
+                              vk_render_semaphores[vk_current_frame],
+                              nullptr, &swapchain_image_index);
 		vkResetFences(vk_device, 1, &vk_in_flight_fences[vk_current_frame]);
 
 		// NOTE: Get current swapchain framebuffer index
-		uint32_t swapchain_image_index = 0;
-		vkAcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX,
-		                      vk_render_semaphores[vk_current_frame],
-		                      nullptr, &swapchain_image_index);
 
 		VkCommandBuffer cmd = vk_command_buffers[swapchain_image_index];
 
