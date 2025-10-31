@@ -27,21 +27,39 @@ namespace {
 
     static uint32_t g_ubo_align = 0;
     static uint32_t g_model_stride = 0;
+
     struct Vertex {
         veekay::vec3 position;
         veekay::vec3 normal;
         veekay::vec2 uv;
         // NOTE: You can add more attributes
     };
-
+    struct PointLightBufferHeader {
+        uint32_t count;
+        uint32_t _pad1;
+        uint32_t _pad2;
+        uint32_t _pad3;
+    };
     struct SceneUniforms {
         veekay::mat4 view_projection;
+        veekay::vec3 view_position;
+        float _pad0;
+        veekay::vec3 ambient_light_intensity;
+        float _pad1;
+        veekay::vec3 sun_light_direction;
+        float _pad2;
+        veekay::vec3 sun_light_color;
+        float _pad3;
     };
 
     struct ModelUniforms {
         veekay::mat4 model;
         veekay::vec3 albedo_color;
         float _pad0;
+        veekay::vec3 specular_color;
+        float shininess;
+        float _pad1;
+        float _pad2;
     };
 
     struct Mesh {
@@ -59,14 +77,29 @@ namespace {
         veekay::mat4 matrix() const;
     };
 
+    // ADDED: Структура точечного источника света
+    struct PointLight {
+        veekay::vec3 position;
+        float _pad0;
+        veekay::vec3 color;
+        float intensity;
+    };
+
+    // ADDED: Структура материала с Blinn-Phong параметрами
+    struct Material {
+        veekay::vec3 albedo_color;
+        veekay::vec3 specular_color;
+        float shininess;
+    };
+
     struct Model {
         Mesh mesh;
         Transform transform;
-        veekay::vec3 albedo_color;
+        Material material; // CHANGED: используем Material вместо просто albedo_color
     };
 
     struct Camera {
-        float yaw = -90.0f;   // смотрим вдоль -Z по умолчанию
+        float yaw = -90.0f; // смотрим вдоль -Z по умолчанию
         float pitch = 0.0f;   // горизонтально
         constexpr static float default_fov = 60.0f;
         constexpr static float default_near_plane = 0.01f;
@@ -106,6 +139,15 @@ namespace {
 
         VkPipelineLayout pipeline_layout;
         VkPipeline pipeline;
+
+        // ADDED: Параметры освещения
+        veekay::vec3 ambient_light = {0.2f, 0.2f, 0.2f};
+        veekay::vec3 sun_direction = veekay::vec3::normalized({0.3f, -1.0f, 0.5f});
+        veekay::vec3 sun_color = {1.0f, 1.0f, 0.9f};
+
+        // ADDED: Точечные источники света
+        std::vector<PointLight> point_lights;
+        veekay::graphics::Buffer *point_lights_buffer = nullptr;
 
         veekay::graphics::Buffer *scene_uniforms_buffer;
         veekay::graphics::Buffer *model_uniforms_buffer;
@@ -360,6 +402,7 @@ namespace {
             };
 
             {
+                // ADDED: Добавляем storage buffer в пул дескрипторов
                 VkDescriptorPoolSize pools[] = {
                         {
                                 .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -371,6 +414,10 @@ namespace {
                         },
                         {
                                 .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                .descriptorCount = 8,
+                        },
+                        {
+                                .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                 .descriptorCount = 8,
                         }
                 };
@@ -392,6 +439,7 @@ namespace {
 
             // NOTE: Descriptor set layout specification
             {
+                // ADDED: Добавляем binding для storage buffer с точечными источниками света
                 VkDescriptorSetLayoutBinding bindings[] = {
                         {
                                 .binding = 0,
@@ -404,6 +452,12 @@ namespace {
                                 .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
                                 .descriptorCount = 1,
                                 .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        },
+                        {
+                                .binding = 2,
+                                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                .descriptorCount = 1,
+                                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                         },
                 };
 
@@ -475,15 +529,6 @@ namespace {
             }
         }
 
-        scene_uniforms_buffer = new veekay::graphics::Buffer(
-                sizeof(SceneUniforms),
-                nullptr,
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-
-        model_uniforms_buffer = new veekay::graphics::Buffer(
-                max_models * sizeof(ModelUniforms),
-                nullptr,
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physical_device, &props);
         g_ubo_align = uint32_t(props.limits.minUniformBufferOffsetAlignment);
@@ -499,6 +544,50 @@ namespace {
                 max_models * g_model_stride,
                 nullptr,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+
+        // ADDED: Создание storage buffer для точечных источников света
+        {
+            // Добавляем несколько точечных источников света
+            point_lights.push_back(PointLight{
+                    .position = {-2.0f, -1.5f, 0.0f},
+                    .color = {1.0f, 0.0f, 0.0f},
+                    .intensity = 10.0f
+            });
+
+            point_lights.push_back(PointLight{
+                    .position = {2.0f, -1.5f, 0.0f},
+                    .color = {0.0f, 1.0f, 0.0f},
+                    .intensity = 10.0f
+            });
+
+            point_lights.push_back(PointLight{
+                    .position = {0.0f, -2.0f, 2.0f},
+                    .color = {0.0f, 0.0f, 1.0f},
+                    .intensity = 10.0f
+            });
+
+            // FIXED: Размер буфера с учётом выравненного заголовка (16 байт)
+            size_t header_size = sizeof(PointLightBufferHeader);
+            size_t buffer_size = header_size + point_lights.size() * sizeof(PointLight);
+            point_lights_buffer = new veekay::graphics::Buffer(
+                    buffer_size,
+                    nullptr,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+            );
+
+            // FIXED: Записываем выравненный заголовок + данные
+            uint8_t *mapped = static_cast<uint8_t *>(point_lights_buffer->mapped_region);
+            PointLightBufferHeader header{
+                    .count = static_cast<uint32_t>(point_lights.size()),
+                    ._pad1 = 0,
+                    ._pad2 = 0,
+                    ._pad3 = 0
+            };
+            std::memcpy(mapped, &header, header_size);
+            std::memcpy(mapped + header_size, point_lights.data(),
+                        point_lights.size() * sizeof(PointLight));
+        }
+
         // NOTE: This texture and sampler is used when texture could not be loaded
         {
             VkSamplerCreateInfo info{
@@ -523,6 +612,7 @@ namespace {
         }
 
         {
+            // ADDED: Обновляем descriptor sets с storage buffer
             VkDescriptorBufferInfo buffer_infos[] = {
                     {
                             .buffer = scene_uniforms_buffer->buffer,
@@ -533,6 +623,11 @@ namespace {
                             .buffer = model_uniforms_buffer->buffer,
                             .offset = 0,
                             .range = sizeof(ModelUniforms),
+                    },
+                    {
+                            .buffer = point_lights_buffer->buffer,
+                            .offset = 0,
+                            .range = VK_WHOLE_SIZE,
                     },
             };
 
@@ -554,6 +649,15 @@ namespace {
                             .descriptorCount = 1,
                             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
                             .pBufferInfo = &buffer_infos[1],
+                    },
+                    {
+                            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                            .dstSet = descriptor_set,
+                            .dstBinding = 2,
+                            .dstArrayElement = 0,
+                            .descriptorCount = 1,
+                            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                            .pBufferInfo = &buffer_infos[2],
                     },
             };
 
@@ -645,10 +749,15 @@ namespace {
         }
 
         // NOTE: Add models to scene
+        // CHANGED: Добавляем материалы с параметрами Blinn-Phong
         models.emplace_back(Model{
                 .mesh = plane_mesh,
                 .transform = Transform{},
-                .albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f}
+                .material = Material{
+                        .albedo_color = {0.8f, 0.8f, 0.8f},
+                        .specular_color = {0.5f, 0.5f, 0.5f},
+                        .shininess = 32.0f
+                }
         });
 
         models.emplace_back(Model{
@@ -656,7 +765,11 @@ namespace {
                 .transform = Transform{
                         .position = {-2.0f, -0.5f, -1.5f},
                 },
-                .albedo_color = veekay::vec3{1.0f, 0.0f, 0.0f}
+                .material = Material{
+                        .albedo_color = {1.0f, 0.0f, 0.0f},
+                        .specular_color = {1.0f, 1.0f, 1.0f},
+                        .shininess = 64.0f
+                }
         });
 
         models.emplace_back(Model{
@@ -664,7 +777,11 @@ namespace {
                 .transform = Transform{
                         .position = {1.5f, -0.5f, -0.5f},
                 },
-                .albedo_color = veekay::vec3{0.0f, 1.0f, 0.0f}
+                .material = Material{
+                        .albedo_color = {0.0f, 1.0f, 0.0f},
+                        .specular_color = {1.0f, 1.0f, 1.0f},
+                        .shininess = 64.0f
+                }
         });
 
         models.emplace_back(Model{
@@ -672,7 +789,11 @@ namespace {
                 .transform = Transform{
                         .position = {0.0f, -0.5f, 1.0f},
                 },
-                .albedo_color = veekay::vec3{0.0f, 0.0f, 1.0f}
+                .material = Material{
+                        .albedo_color = {0.0f, 0.0f, 1.0f},
+                        .specular_color = {1.0f, 1.0f, 1.0f},
+                        .shininess = 64.0f
+                }
         });
     }
 
@@ -689,6 +810,9 @@ namespace {
         delete plane_mesh.index_buffer;
         delete plane_mesh.vertex_buffer;
 
+        // ADDED: Удаляем буфер точечных источников света
+        delete point_lights_buffer;
+
         delete model_uniforms_buffer;
         delete scene_uniforms_buffer;
 
@@ -702,23 +826,108 @@ namespace {
     }
 
     void update(double time) {
-        ImGui::Begin("Controls:");
+        // ADDED: ImGui controls для управления освещением
+        ImGui::Begin("Lighting Controls");
+
+        if (ImGui::CollapsingHeader("Ambient Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::ColorEdit3("Ambient Color", &ambient_light.x);
+        }
+
+        if (ImGui::CollapsingHeader("Directional Light (Sun)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat3("Direction", &sun_direction.x, 0.01f, -1.0f, 1.0f);
+            sun_direction = veekay::vec3::normalized(sun_direction);
+            ImGui::ColorEdit3("Sun Color", &sun_color.x);
+        }
+
+        // FIXED: Флаг для отслеживания изменений буфера
+        bool buffer_resized = false;
+
+        if (ImGui::CollapsingHeader("Point Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (size_t i = 0; i < point_lights.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::TreeNode("Light", "Point Light %zu", i)) {
+                    ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
+                    ImGui::ColorEdit3("Color", &point_lights[i].color.x);
+                    ImGui::DragFloat("Intensity", &point_lights[i].intensity, 0.1f, 0.0f, 100.0f);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+
+            if (ImGui::Button("Add Point Light") && point_lights.size() < 16) {
+                point_lights.push_back(PointLight{
+                        .position = {0.0f, -1.0f, 0.0f},
+                        .color = {1.0f, 1.0f, 1.0f},
+                        .intensity = 10.0f
+                });
+
+                // CRITICAL: Ждём завершения всех операций GPU перед удалением буфера
+                VkDevice &device = veekay::app.vk_device;
+                vkDeviceWaitIdle(device);
+
+                // FIXED: Пересоздаём буфер с учётом выравненного заголовка
+                delete point_lights_buffer;
+                size_t header_size = sizeof(PointLightBufferHeader);
+                size_t buffer_size = header_size + point_lights.size() * sizeof(PointLight);
+                point_lights_buffer = new veekay::graphics::Buffer(
+                        buffer_size,
+                        nullptr,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                );
+                buffer_resized = true;
+            }
+        }
+
         ImGui::End();
+
+        // FIXED: Обновляем дескриптор если буфер был пересоздан
+        if (buffer_resized) {
+            VkDevice &device = veekay::app.vk_device;
+
+            VkDescriptorBufferInfo buffer_info{
+                    .buffer = point_lights_buffer->buffer,
+                    .offset = 0,
+                    .range = VK_WHOLE_SIZE,
+            };
+
+            VkWriteDescriptorSet write_info{
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = descriptor_set,
+                    .dstBinding = 2,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .pBufferInfo = &buffer_info,
+            };
+
+            vkUpdateDescriptorSets(device, 1, &write_info, 0, nullptr);
+        }
+
+        // ADDED: Обновляем storage buffer точечных источников
+        uint8_t *mapped = static_cast<uint8_t *>(point_lights_buffer->mapped_region);
+        PointLightBufferHeader header{
+                .count = static_cast<uint32_t>(point_lights.size()),
+                ._pad1 = 0,
+                ._pad2 = 0,
+                ._pad3 = 0
+        };
+        size_t header_size = sizeof(PointLightBufferHeader);
+        std::memcpy(mapped, &header, header_size);
+        std::memcpy(mapped + header_size, point_lights.data(),
+                    point_lights.size() * sizeof(PointLight));
+
+        // Управление камерой
         ImGuiIO &io = ImGui::GetIO();
         if (!io.WantCaptureMouse && !io.WantCaptureKeyboard) {
             using namespace veekay::input;
 
             if (mouse::isButtonDown(mouse::Button::left)) {
-                auto move_delta = mouse::cursorDelta(); // {dx, dy}
-                // TODO: Use mouse_delta to update camera rotation
+                auto move_delta = mouse::cursorDelta();
                 const float sensitivity = 0.1f;
                 camera.yaw += move_delta.x * sensitivity;
                 camera.pitch -= move_delta.y * sensitivity;
                 camera.pitch = clampf(camera.pitch, -89.0f, 89.0f);
             }
-            // TODO: Use mouse_delta to update camera rotation
-
-            auto view = camera.view();
 
             veekay::vec3 worldUp = {0.0f, 1.0f, 0.0f};
             float cy = cosf(toRadians(camera.yaw));
@@ -729,30 +938,35 @@ namespace {
             veekay::vec3 right = veekay::vec3::normalized(veekay::vec3::cross(front, worldUp));
             veekay::vec3 up = veekay::vec3::normalized(veekay::vec3::cross(right, front));
 
-
+            const float speed = 0.1f;
             if (keyboard::isKeyDown(keyboard::Key::w))
-                camera.position -= front * 0.1f;
+                camera.position -= front * speed;
 
             if (keyboard::isKeyDown(keyboard::Key::s))
-                camera.position += front * 0.1f;
+                camera.position += front * speed;
 
             if (keyboard::isKeyDown(keyboard::Key::d))
-                camera.position += right * 0.1f;
+                camera.position += right * speed;
 
             if (keyboard::isKeyDown(keyboard::Key::a))
-                camera.position -= right * 0.1f;
+                camera.position -= right * speed;
 
             if (keyboard::isKeyDown(keyboard::Key::q))
-                camera.position -= up * 0.1f;
+                camera.position -= up * speed;
 
             if (keyboard::isKeyDown(keyboard::Key::z))
-                camera.position += up * 0.1f;
-
+                camera.position += up * speed;
         }
 
         float aspect_ratio = float(veekay::app.window_width) / float(veekay::app.window_height);
+
+        // CHANGED: Добавляем параметры освещения в SceneUniforms
         SceneUniforms scene_uniforms{
                 .view_projection = camera.view_projection(aspect_ratio),
+                .view_position = camera.position,
+                .ambient_light_intensity = ambient_light,
+                .sun_light_direction = sun_direction,
+                .sun_light_color = sun_color,
         };
 
         std::vector<ModelUniforms> model_uniforms(models.size());
@@ -761,7 +975,9 @@ namespace {
             ModelUniforms &uniforms = model_uniforms[i];
 
             uniforms.model = model.transform.matrix();
-            uniforms.albedo_color = model.albedo_color;
+            uniforms.albedo_color = model.material.albedo_color;
+            uniforms.specular_color = model.material.specular_color;
+            uniforms.shininess = model.material.shininess;
         }
 
         *(SceneUniforms *) scene_uniforms_buffer->mapped_region = scene_uniforms;
@@ -770,6 +986,7 @@ namespace {
             std::memcpy(base + i * g_model_stride, &model_uniforms[i], sizeof(ModelUniforms));
         }
     }
+
 
     void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
         vkResetCommandBuffer(cmd, 0);
