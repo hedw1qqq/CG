@@ -854,12 +854,24 @@ namespace {
                 ImGui::PopID();
             }
 
-            if (ImGui::Button("Add Point Light") && point_lights.size() < 16) {
-                point_lights.push_back(PointLight{
-                        .position = {0.0f, -1.0f, 0.0f},
-                        .color = {1.0f, 1.0f, 1.0f},
-                        .intensity = 10.0f
-                });
+            if (ImGui::Button("Add Point Light at Camera")) {
+                if (point_lights.size() < 16) {
+                    float cy = cosf(toRadians(camera.yaw));
+                    float sy = sinf(toRadians(camera.yaw));
+                    float cp = cosf(toRadians(camera.pitch));
+                    float sp = sinf(toRadians(camera.pitch));
+
+                    veekay::vec3 front{cy * cp, sp, sy * cp};
+                    veekay::vec3 lightPos = camera.position + front * 2.0f;
+
+                    point_lights.push_back(PointLight{
+                            .position = lightPos,
+                            .color = {1.0f, 1.0f, 1.0f},
+                            .intensity = 15.0f
+                    });
+
+                }
+
 
                 // CRITICAL: Ждём завершения всех операций GPU перед удалением буфера
                 VkDevice &device = veekay::app.vk_device;
