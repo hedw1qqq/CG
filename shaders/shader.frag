@@ -6,12 +6,24 @@ layout (location = 2) in vec2 f_uv;
 
 layout (location = 0) out vec4 final_color;
 
-// Структура точечного источника света
 struct PointLight {
     vec3 position;
     float _pad0;
     vec3 color;
     float intensity;
+};
+
+struct SpotLight {
+    vec3 position;
+    float _pad0;
+    vec3 direction;
+    float cutoff_angle;
+    vec3 color;
+    float outer_cutoff_angle;
+    float intensity;
+    float _pad1;
+    float _pad2;
+    float _pad3;
 };
 
 layout(binding = 0, std140) uniform SceneUniforms {
@@ -39,11 +51,18 @@ layout(binding = 2, std430) readonly buffer PointLights {
     uint _padA;
     uint _padB;
     uint _padC;
-    PointLight point_lights[]; // начинается с offset 16
+    PointLight point_lights[];
+};
+
+layout(binding = 3, std430) readonly buffer SpotLights {
+    uint spot_light_count;
+    uint _padD;
+    uint _padE;
+    uint _padF;
+    SpotLight spot_lights[];
 };
 
 vec3 calculateDirectionalLight(vec3 normal, vec3 view_dir) {
-    // Направление света (инвертируем, так как храним направление ОТ источника)
     vec3 light_dir = normalize(-sun_light_direction);
 
     // Диффузная компонента
@@ -60,8 +79,6 @@ vec3 calculateDirectionalLight(vec3 normal, vec3 view_dir) {
 
 vec3 calculatePointLight(PointLight light, vec3 normal, vec3 frag_pos, vec3 view_dir) {
     vec3 light_dir = normalize(light.position - frag_pos);
-
-    // Расстояние до источника света
     float distance = length(light.position - frag_pos);
 
     // Затухание по закону обратных квадратов
@@ -79,25 +96,52 @@ vec3 calculatePointLight(PointLight light, vec3 normal, vec3 frag_pos, vec3 view
     return (diffuse + specular) * attenuation;
 }
 
+vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 frag_pos, vec3 view_dir) {
+    vec3 light_dir = normalize(light.position - frag_pos);
+    float distance = length(light.position - frag_pos);
+
+    // Затухание по расстоянию
+    float attenuation = light.intensity / (distance * distance);
+
+    // Угол между направлением прожектора и вектором к фрагменту
+    float theta = dot(light_dir, normalize(-light.direction));
+
+    // Плавное затухание по углу (smooth transition)
+    float epsilon = light.cutoff_angle - light.outer_cutoff_angle;
+    float intensity = clamp((theta - light.outer_cutoff_angle) / epsilon, 0.0, 1.0);
+
+    // Диффузная компонента
+    float diff = max(dot(normal, light_dir), 0.0);
+    vec3 diffuse = diff * albedo_color * light.color;
+
+    // Specular компонента (Блинн-Фонг)
+    vec3 halfway_dir = normalize(light_dir + view_dir);
+    float spec = pow(max(dot(normal, halfway_dir), 0.0), shininess);
+    vec3 specular = spec * specular_color * light.color;
+
+    return (diffuse + specular) * attenuation * intensity;
+}
+
 void main() {
     vec3 normal = normalize(f_normal);
     vec3 view_dir = normalize(view_position - f_position);
 
-    // Рассеянный свет (ambient)
     vec3 ambient = ambient_light_intensity * albedo_color;
 
-    // Направленный свет (sun)
+    // sun
     vec3 directional = calculateDirectionalLight(normal, view_dir);
 
-    // Точечные источники света
     vec3 point_lighting = vec3(0.0);
     for (uint i = 0; i < point_light_count; ++i) {
         point_lighting += calculatePointLight(point_lights[i], normal, f_position, view_dir);
     }
 
-    vec3 color = ambient + directional + point_lighting;
+    vec3 spot_lighting = vec3(0.0);
+    for (uint i = 0; i < spot_light_count; ++i) {
+        spot_lighting += calculateSpotLight(spot_lights[i], normal, f_position, view_dir);
+    }
 
-    color = pow(color, vec3(1.0/2.2));
-
+    vec3 color = ambient + directional + point_lighting + spot_lighting;
+    color = pow(color, vec3(1.0/2.2));  // Gamma correction
     final_color = vec4(color, 1.0);
 }
