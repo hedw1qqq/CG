@@ -1006,11 +1006,11 @@ namespace {
             ImGui::Spacing();
 
             if (camera.mode == CameraMode::LOOK_AT) {
-                ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "✓ Look-At Mode");
+                ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "Look-At Mode");
                 ImGui::Text("  Yaw:   %.1f°", camera.yaw);
                 ImGui::Text("  Pitch: %.1f°", camera.pitch);
             } else {
-                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "✓ Model Transform Mode");
+                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "Model Transform Mode");
                 ImGui::Text("  Yaw:   %.1f°", camera.model_yaw);
                 ImGui::Text("  Pitch: %.1f°", camera.model_pitch);
                 ImGui::SliderFloat("Roll", &camera.model_roll, -180.0f, 180.0f, "%.1f°");
@@ -1047,17 +1047,35 @@ namespace {
             for (size_t i = 0; i < spot_lights.size(); ++i) {
                 ImGui::PushID(static_cast<int>(i) + 1000); // смещение ID
                 if (ImGui::TreeNode("##spotlight", "Spot Light %zu", i)) {
+
                     ImGui::DragFloat3("Position", &spot_lights[i].position.x, 0.1f);
                     ImGui::DragFloat3("Direction", &spot_lights[i].direction.x, 0.01f, -1.0f, 1.0f);
                     spot_lights[i].direction = veekay::vec3::normalized(spot_lights[i].direction);
 
-                    // Углы в градусах для UI
+                    const float MIN_ANGLE_DIFF = 3.0f;
                     float inner_deg = std::acos(spot_lights[i].cutoff_angle) * 180.0f / M_PI;
                     float outer_deg = std::acos(spot_lights[i].outer_cutoff_angle) * 180.0f / M_PI;
                     if (ImGui::SliderFloat("Inner Angle", &inner_deg, 5.0f, 45.0f)) {
+                        if (outer_deg - inner_deg < MIN_ANGLE_DIFF) {
+                            outer_deg = inner_deg + MIN_ANGLE_DIFF;
+                            if (outer_deg > 60.0f) {
+                                outer_deg = 60.0f;
+                                inner_deg = outer_deg - MIN_ANGLE_DIFF;
+                            }
+                        }
                         spot_lights[i].cutoff_angle = std::cos(toRadians(inner_deg));
+                        spot_lights[i].outer_cutoff_angle = std::cos(toRadians(outer_deg));
                     }
+
                     if (ImGui::SliderFloat("Outer Angle", &outer_deg, 10.0f, 60.0f)) {
+                        if (outer_deg - inner_deg < MIN_ANGLE_DIFF) {
+                            inner_deg = outer_deg - MIN_ANGLE_DIFF;
+                            if (inner_deg < 5.0f) {
+                                inner_deg = 5.0f;
+                                outer_deg = inner_deg + MIN_ANGLE_DIFF;
+                            }
+                        }
+                        spot_lights[i].cutoff_angle = std::cos(toRadians(inner_deg));
                         spot_lights[i].outer_cutoff_angle = std::cos(toRadians(outer_deg));
                     }
 
@@ -1071,7 +1089,7 @@ namespace {
 
         ImGui::End();
 
-        // Обновление буферов точечных источников каждый кадр
+        // Обновление буферов
         {
             uint8_t *mapped = static_cast<uint8_t *>(point_lights_buffer->mapped_region);
             PointLightBufferHeader header{
