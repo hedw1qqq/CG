@@ -1,19 +1,17 @@
 #include "veekay/input.hpp"
-#include <cmath>
-#include <cstring>
-#include <fstream>
-#include <iostream>
+#include <cstdint>
 #include <vector>
-
+#include <iostream>
+#include <fstream>
 #define _USE_MATH_DEFINES
-
-#include <math.h>
-#include <imgui.h>
-#include <vulkan/vulkan_core.h>
+#include <algorithm>
+#include <cmath>
 #include "veekay/graphics.hpp"
 #include "veekay/veekay.hpp"
+#include "imgui.h"
 
 namespace {
+
     constexpr uint32_t max_models = 1024;
 
     static inline VkDeviceSize align_up(VkDeviceSize v, VkDeviceSize a) {
@@ -101,7 +99,7 @@ namespace {
         float _pad3;
     };
 
-    // Структура материала с Blinn-Phong параметрами
+// Структура материала с Blinn-Phong параметрами
     struct Material {
         veekay::vec3 albedo_color;
         veekay::vec3 specular_color;
@@ -114,100 +112,75 @@ namespace {
         Material material;
     };
 
-    enum class CameraMode {
-        LOOK_AT,
-        MODEL_TRANSFORM
-    };
-
     struct Camera {
-        float yaw = -90.0f;
-        float pitch = 0.0f;
         constexpr static float default_fov = 60.0f;
         constexpr static float default_near_plane = 0.01f;
         constexpr static float default_far_plane = 100.0f;
+
         veekay::vec3 position = {};
         veekay::vec3 rotation = {};
+
         float fov = default_fov;
         float near_plane = default_near_plane;
         float far_plane = default_far_plane;
 
-        float model_yaw = -90.0f;
-        float model_pitch = 0.0f;
-        float model_roll = 0.0f;
-
-        CameraMode mode = CameraMode::LOOK_AT;
-
+        // Сохраненные состояния для каждого режима
         struct SavedState {
             veekay::vec3 position;
-            float yaw;
-            float pitch;
-            float roll;
+            veekay::vec3 rotation;
+            veekay::vec3 target;
         };
-        SavedState look_at_saved_state;
-        SavedState model_transform_saved_state;
 
-        void saveCurrentState() {
-            if (mode == CameraMode::LOOK_AT) {
-                look_at_saved_state.position = position;
-                look_at_saved_state.yaw = yaw;
-                look_at_saved_state.pitch = pitch;
-                look_at_saved_state.roll = 0.0f;
-            } else {
-                model_transform_saved_state.position = position;
-                model_transform_saved_state.yaw = model_yaw;
-                model_transform_saved_state.pitch = model_pitch;
-                model_transform_saved_state.roll = model_roll;
-            }
-        }
-
-        void restoreCurrentState() {
-            if (mode == CameraMode::LOOK_AT) {
-                position = look_at_saved_state.position;
-                yaw = look_at_saved_state.yaw;
-                pitch = look_at_saved_state.pitch;
-            } else {
-                position = model_transform_saved_state.position;
-                model_yaw = model_transform_saved_state.yaw;
-                model_pitch = model_transform_saved_state.pitch;
-                model_roll = model_transform_saved_state.roll;
-            }
-        }
-
-        void switchMode(CameraMode new_mode) {
-            if (new_mode != mode) {
-
-                if (mode == CameraMode::LOOK_AT && new_mode == CameraMode::MODEL_TRANSFORM) {
-                    model_yaw = yaw;
-                    model_pitch = pitch;
-
-                } else if (mode == CameraMode::MODEL_TRANSFORM && new_mode == CameraMode::LOOK_AT) {
-                    yaw = model_yaw;
-                    pitch = model_pitch;
-                }
-                mode = new_mode;
-            }
-        }
+        SavedState normal_view_state;
+        SavedState look_at_view_state;
 
         // NOTE: View matrix of camera (inverse of a transform)
         veekay::mat4 view() const;
 
-        veekay::mat4 viewLookAt() const;
-
-        veekay::mat4 viewModelTransform() const;
+        veekay::mat4 look_at(veekay::vec3 at) const;
 
         // NOTE: View and projection composition
-        veekay::mat4 view_projection(float aspect_ratio) const;
+        veekay::mat4 view_projection(float aspect_ratio, const veekay::mat4 &view) const;
+
+        // Методы для сохранения/восстановления состояния
+        void saveNormalViewState() {
+            normal_view_state.position = position;
+            normal_view_state.rotation = rotation;
+        }
+
+        void saveLookAtViewState(const veekay::vec3 &target) {
+            look_at_view_state.position = position;
+            look_at_view_state.rotation = rotation;
+            look_at_view_state.target = target;
+        }
+
+        void restoreNormalViewState() {
+            position = normal_view_state.position;
+            rotation = normal_view_state.rotation;
+        }
+
+        void restoreLookAtViewState() {
+            position = look_at_view_state.position;
+            rotation = look_at_view_state.rotation;
+        }
     };
 
-    // NOTE: Scene objects
+// NOTE: Scene objects
     inline namespace {
         Camera camera{
                 .position = {0.0f, -0.5f, -3.0f}
         };
+
         std::vector<Model> models;
     }
 
-    // NOTE: Vulkan objects
+// NOTE: Imgui variables
+    inline namespace {
+        bool look_at_view = false;
+        veekay::vec3 target_look_at{1, 1, 1};
+    }
+
+// NOTE: Vulkan objects
     inline namespace {
         VkShaderModule vertex_shader_module;
         VkShaderModule fragment_shader_module;
@@ -217,7 +190,7 @@ namespace {
         VkPipelineLayout pipeline_layout;
         VkPipeline pipeline;
 
-        //  Параметры освещения
+        // Параметры освещения
         veekay::vec3 ambient_light = {0.2f, 0.2f, 0.2f};
         veekay::vec3 sun_direction = veekay::vec3::normalized({0.3f, 1.0f, 0.5f});
         veekay::vec3 sun_color = {1.0f, 1.0f, 0.9f};
@@ -250,13 +223,12 @@ namespace {
 
     veekay::mat4 mat4_inverse_rigid(const veekay::mat4 &m) {
         veekay::mat4 result = veekay::mat4::identity();
-
         for (int i = 0; i < 3; ++i) {
             for (int j = 0; j < 3; ++j) {
                 result[j][i] = m[i][j];
             }
         }
-        //  -R^T * t
+        // -R^T * t
         veekay::vec3 t = {m[3][0], m[3][1], m[3][2]};
         result[3][0] = -(result[0][0] * t.x + result[1][0] * t.y + result[2][0] * t.z);
         result[3][1] = -(result[0][1] * t.x + result[1][1] * t.y + result[2][1] * t.z);
@@ -277,67 +249,39 @@ namespace {
         return t * ry * rx * rz * s;
     }
 
-    veekay::mat4 Camera::viewLookAt() const {
-
-        veekay::vec3 worldUp = {0.0f, 1.0f, 0.0f};
-        float cy = cosf(toRadians(yaw));
-        float sy = sinf(toRadians(yaw));
-        float cp = cosf(toRadians(pitch));
-        float sp = sinf(toRadians(pitch));
-        veekay::vec3 front = veekay::vec3::normalized(veekay::vec3{cy * cp, sp, sy * cp});
-        veekay::vec3 right = veekay::vec3::normalized(veekay::vec3::cross(front, worldUp));
-        veekay::vec3 up = veekay::vec3::normalized(veekay::vec3::cross(right, front));
-
-        // Матрица вида (lookAt): R^T * T^{-1}
-        veekay::mat4 view = veekay::mat4::identity();
-        // c0 = right
-        view[0][0] = right.x;
-        view[0][1] = right.y;
-        view[0][2] = right.z;
-        view[0][3] = 0.0f;
-        // c1 = up
-        view[1][0] = up.x;
-        view[1][1] = up.y;
-        view[1][2] = up.z;
-        view[1][3] = 0.0f;
-        // c2 = -front
-        view[2][0] = -front.x;
-        view[2][1] = -front.y;
-        view[2][2] = -front.z;
-        view[2][3] = 0.0f;
-        // c3 = translation = {-dot(right,p), -dot(up,p), dot(front,p), 1}
-        view[3][0] = -veekay::vec3::dot(right, position);
-        view[3][1] = -veekay::vec3::dot(up, position);
-        view[3][2] = veekay::vec3::dot(front, position);
-        view[3][3] = 1.0f;
-        return view;
-    }
-
-    // MODEL TRANSFORM режим
-    veekay::mat4 Camera::viewModelTransform() const {
-        auto t = veekay::mat4::translation(position);
-        auto ry = veekay::mat4::rotation({0.0f, 1.0f, 0.0f}, toRadians(model_yaw));
-        auto rx = veekay::mat4::rotation({1.0f, 0.0f, 0.0f}, toRadians(model_pitch));
-        auto rz = veekay::mat4::rotation({0.0f, 0.0f, 1.0f}, toRadians(model_roll));
-        veekay::mat4 model = t * ry * rx * rz;
-        return mat4_inverse_rigid(model);
-    }
 
     veekay::mat4 Camera::view() const {
-        if (mode == CameraMode::LOOK_AT) {
-            return viewLookAt();
-        } else {
-            return viewModelTransform();
-        }
+        auto t = veekay::mat4::translation(-position);
+        auto rotX = veekay::mat4::rotation({1.0f, 0.0f, 0.0f}, rotation.x);
+        auto rotY = veekay::mat4::rotation({0.0f, 1.0f, 0.0f}, rotation.y);
+        auto rotZ = veekay::mat4::rotation({0.0f, 0.0f, 1.0f}, rotation.z);
+        auto r = rotY * rotX * rotZ;
+        return t * r;
     }
 
-    veekay::mat4 Camera::view_projection(float aspect_ratio) const {
-        auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
-        return view() * projection;
+    veekay::mat4 Camera::look_at(veekay::vec3 at) const {
+        const veekay::vec3 forward = veekay::vec3::normalized(position - at);
+        veekay::vec3 world_up = {0, 1, 0};
+        veekay::vec3 right = veekay::vec3::normalized(veekay::vec3::cross(forward, world_up));
+        veekay::vec3 up = veekay::vec3::normalized(veekay::vec3::cross(right, forward));
+
+        const veekay::mat4 basis = {
+                right.x, up.x, -forward.x, 0,
+                right.y, up.y, -forward.y, 0,
+                right.z, up.z, -forward.z, 0,
+                0, 0, 0, 1
+        };
+
+        return veekay::mat4::translation(-position) * basis;
     }
 
-    // NOTE: Loads shader byte code from file
-    // NOTE: Your shaders are compiled via CMake with this code too, look it up
+    veekay::mat4 Camera::view_projection(const float aspect_ratio, const veekay::mat4 &view) const {
+        const auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
+        return view * projection;
+    }
+
+// NOTE: Loads shader byte code from file
+// NOTE: Your shaders are compiled via CMake with this code too, look it up
     VkShaderModule loadShaderModule(const char *path) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         size_t size = file.tellg();
@@ -345,15 +289,18 @@ namespace {
         file.seekg(0);
         file.read(reinterpret_cast<char *>(buffer.data()), size);
         file.close();
+
         VkShaderModuleCreateInfo info{
                 .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                 .codeSize = size,
                 .pCode = buffer.data(),
         };
+
         VkShaderModule result;
         if (vkCreateShaderModule(veekay::app.vk_device, &info, nullptr, &result) != VK_SUCCESS) {
             return nullptr;
         }
+
         return result;
     }
 
@@ -368,6 +315,7 @@ namespace {
                 veekay::app.running = false;
                 return;
             }
+
             fragment_shader_module = loadShaderModule("./shaders/shader.frag.spv");
             if (!fragment_shader_module) {
                 std::cerr << "Failed to load Vulkan fragment shader from file\n";
@@ -402,7 +350,7 @@ namespace {
             VkVertexInputAttributeDescription attributes[] = {
                     {
                             .location = 0, // NOTE: First attribute
-                            .binding = 0,  // NOTE: First vertex buffer
+                            .binding = 0, // NOTE: First vertex buffer
                             .format = VK_FORMAT_R32G32B32_SFLOAT, // NOTE: 3-component vector of floats
                             .offset = static_cast<uint32_t>(offsetof(Vertex,
                                                                      position)), // NOTE: Offset of "position" field in a Vertex struct
@@ -464,6 +412,7 @@ namespace {
                     .minDepth = 0.0f,
                     .maxDepth = 1.0f,
             };
+
             VkRect2D scissor{
                     .offset = {0, 0},
                     .extent = {veekay::app.window_width, veekay::app.window_height},
@@ -521,7 +470,7 @@ namespace {
                         {
                                 .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                 .descriptorCount = 8,
-                        }
+                        },
                 };
                 VkDescriptorPoolCreateInfo info{
                         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -538,7 +487,7 @@ namespace {
 
             // NOTE: Descriptor set layout specification
             {
-                //  binding для storage buffer с точечными и прожекторными источниками света
+                // binding для storage buffer с точечными и прожекторными источниками света
                 VkDescriptorSetLayoutBinding bindings[] = {
                         {
                                 .binding = 0,
@@ -558,7 +507,6 @@ namespace {
                                 .descriptorCount = 1,
                                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                         },
-
                         {
                                 .binding = 3,
                                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -606,26 +554,28 @@ namespace {
                 return;
             }
 
-            VkGraphicsPipelineCreateInfo info{
-                    .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-                    .stageCount = 2,
-                    .pStages = stage_infos,
-                    .pVertexInputState = &input_state_info,
-                    .pInputAssemblyState = &assembly_state_info,
-                    .pViewportState = &viewport_info,
-                    .pRasterizationState = &raster_info,
-                    .pMultisampleState = &sample_info,
-                    .pDepthStencilState = &depth_info,
-                    .pColorBlendState = &blend_info,
-                    .layout = pipeline_layout,
-                    .renderPass = veekay::app.vk_render_pass,
-            };
+            {
+                VkGraphicsPipelineCreateInfo info{
+                        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                        .stageCount = 2,
+                        .pStages = stage_infos,
+                        .pVertexInputState = &input_state_info,
+                        .pInputAssemblyState = &assembly_state_info,
+                        .pViewportState = &viewport_info,
+                        .pRasterizationState = &raster_info,
+                        .pMultisampleState = &sample_info,
+                        .pDepthStencilState = &depth_info,
+                        .pColorBlendState = &blend_info,
+                        .layout = pipeline_layout,
+                        .renderPass = veekay::app.vk_render_pass,
+                };
 
-            // NOTE: Create graphics pipeline
-            if (vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
-                std::cerr << "Failed to create Vulkan pipeline\n";
-                veekay::app.running = false;
-                return;
+                // NOTE: Create graphics pipeline
+                if (vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
+                    std::cerr << "Failed to create Vulkan pipeline\n";
+                    veekay::app.running = false;
+                    return;
+                }
             }
         }
 
@@ -701,7 +651,6 @@ namespace {
                     .outer_cutoff_angle = std::cos(toRadians(20.0f)),
                     .intensity = 40.0f
             });
-
             spot_lights.push_back(SpotLight{
                     .position = {3.0f, 1.5f, 1.0f},
                     .direction = veekay::vec3::normalized({-1.0f, -0.8f, -0.3f}),
@@ -804,7 +753,6 @@ namespace {
                             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                             .pBufferInfo = &buffer_infos[2],
                     },
-
                     {
                             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                             .dstSet = descriptor_set,
@@ -815,16 +763,16 @@ namespace {
                             .pBufferInfo = &buffer_infos[3],
                     },
             };
+
             vkUpdateDescriptorSets(device, sizeof(write_infos) / sizeof(write_infos[0]),
                                    write_infos, 0, nullptr);
         }
 
-        {
-            // NOTE: Plane mesh initialization
+        { // NOTE: Plane mesh initialization
             // (v0)------(v1)
-            //  |      \     |
-            //  |        `--,|
-            //  |           \|
+            //  |      \  |
+            //  |       `--|
+            //  |         \|
             // (v3)------(v2)
             std::vector<Vertex> vertices = {
                     {{-5.0f, 0.0f, 5.0f},  {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}},
@@ -835,6 +783,7 @@ namespace {
             std::vector<uint32_t> indices = {
                     0, 1, 2, 2, 3, 0
             };
+
             plane_mesh.vertex_buffer = new veekay::graphics::Buffer(
                     vertices.size() * sizeof(Vertex), vertices.data(),
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -844,8 +793,7 @@ namespace {
             plane_mesh.indices = uint32_t(indices.size());
         }
 
-        {
-            // NOTE: Cube mesh initialization
+        { // NOTE: Cube mesh initialization
             std::vector<Vertex> vertices = {
                     // Back face
                     {{-0.5f, -0.5f, -0.5f}, {0.0f,  0.0f,  -1.0f}, {0.0f, 0.0f}},
@@ -886,6 +834,7 @@ namespace {
                     16, 17, 18, 18, 19, 16,
                     20, 21, 22, 22, 23, 20,
             };
+
             cube_mesh.vertex_buffer = new veekay::graphics::Buffer(
                     vertices.size() * sizeof(Vertex), vertices.data(),
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -895,56 +844,56 @@ namespace {
             cube_mesh.indices = uint32_t(indices.size());
         }
 
-        // NOTE: Add models to scene
-        models.emplace_back(Model{
-                .mesh = plane_mesh,
-                .transform = Transform{},
-                .material = Material{
-                        .albedo_color = {0.8f, 0.8f, 0.8f},
-                        .specular_color = {0.5f, 0.5f, 0.5f},
-                        .shininess = 32.0f
-                }
-        });
-        models.emplace_back(Model{
-                .mesh = cube_mesh,
-                .transform = Transform{
-                        .position = {-2.0f, -0.5f, -1.5f},
-                },
-                .material = Material{
-                        .albedo_color = {1.0f, 0.0f, 0.0f},
-                        .specular_color = {1.0f, 1.0f, 1.0f},
-                        .shininess = 64.0f
-                }
-        });
-        models.emplace_back(Model{
-                .mesh = cube_mesh,
-                .transform = Transform{
-                        .position = {1.5f, -0.5f, -0.5f},
-                },
-                .material = Material{
-                        .albedo_color = {0.0f, 1.0f, 0.0f},
-                        .specular_color = {1.0f, 1.0f, 1.0f},
-                        .shininess = 64.0f
-                }
-        });
-        models.emplace_back(Model{
-                .mesh = cube_mesh,
-                .transform = Transform{
-                        .position = {0.0f, -0.5f, 1.0f},
-                },
-                .material = Material{
-                        .albedo_color = {0.0f, 0.0f, 1.0f},
-                        .specular_color = {1.0f, 1.0f, 1.0f},
-                        .shininess = 64.0f
-                }
-        });
+        { // NOTE: Add models to scene
+            models.emplace_back(Model{
+                    .mesh = plane_mesh,
+                    .transform = Transform{},
+                    .material = Material{
+                            .albedo_color = {0.8f, 0.8f, 0.8f},
+                            .specular_color = {0.5f, 0.5f, 0.5f},
+                            .shininess = 32.0f
+                    }
+            });
+            models.emplace_back(Model{
+                    .mesh = cube_mesh,
+                    .transform = Transform{
+                            .position = {-2.0f, -0.5f, -1.5f},
+                    },
+                    .material = Material{
+                            .albedo_color = {1.0f, 0.0f, 0.0f},
+                            .specular_color = {1.0f, 1.0f, 1.0f},
+                            .shininess = 64.0f
+                    }
+            });
+            models.emplace_back(Model{
+                    .mesh = cube_mesh,
+                    .transform = Transform{
+                            .position = {1.5f, -0.5f, -0.5f},
+                    },
+                    .material = Material{
+                            .albedo_color = {0.0f, 1.0f, 0.0f},
+                            .specular_color = {1.0f, 1.0f, 1.0f},
+                            .shininess = 64.0f
+                    }
+            });
+            models.emplace_back(Model{
+                    .mesh = cube_mesh,
+                    .transform = Transform{
+                            .position = {0.0f, -0.5f, 1.0f},
+                    },
+                    .material = Material{
+                            .albedo_color = {0.0f, 0.0f, 1.0f},
+                            .specular_color = {1.0f, 1.0f, 1.0f},
+                            .shininess = 64.0f
+                    }
+            });
+        }
     }
 
-    // NOTE: Destroy resources here, do not cause leaks in your program!
+// NOTE: Destroy resources here, do not cause leaks in your program!
     void shutdown() {
         VkDevice &device = veekay::app.vk_device;
         vkDestroySampler(device, missing_texture_sampler, nullptr);
-
         delete missing_texture;
         delete cube_mesh.index_buffer;
         delete cube_mesh.vertex_buffer;
@@ -954,7 +903,6 @@ namespace {
         delete spot_lights_buffer;
         delete model_uniforms_buffer;
         delete scene_uniforms_buffer;
-
         vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
         vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
         vkDestroyPipeline(device, pipeline, nullptr);
@@ -968,11 +916,23 @@ namespace {
 
         // СЕКЦИЯ КАМЕРЫ
         if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Text("Current Mode:");
-            const char *modes[] = {"Look-At", "Model Transform"};
-            int current_mode = static_cast<int>(camera.mode);
-            if (ImGui::Combo("##mode", &current_mode, modes, 2)) {
-                camera.switchMode(static_cast<CameraMode>(current_mode));
+
+            static bool prev_look_at_view = look_at_view;
+
+            ImGui::Checkbox("Look At Matrix?", &look_at_view);
+
+            if (look_at_view != prev_look_at_view) {
+                if (look_at_view) {
+                    camera.saveNormalViewState();
+
+                } else {
+                    camera.saveLookAtViewState(target_look_at);
+                }
+                prev_look_at_view = look_at_view;
+            }
+
+            if (look_at_view) {
+                ImGui::InputFloat3("Target", target_look_at.elements);
             }
 
             ImGui::Spacing();
@@ -980,19 +940,30 @@ namespace {
             ImGui::Spacing();
 
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "State Management:");
+
             if (ImGui::Button("Save Current State", ImVec2(-1, 0))) {
-                camera.saveCurrentState();
+                if (look_at_view) {
+                    camera.saveLookAtViewState(target_look_at);
+                } else {
+                    camera.saveNormalViewState();
+                }
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Save position and angles for %s mode",
-                                  camera.mode == CameraMode::LOOK_AT ? "Look-At" : "Model Transform");
+                ImGui::SetTooltip("Save current position and rotation for %s mode",
+                                  look_at_view ? "Look-At" : "Normal View");
             }
+
             if (ImGui::Button("Restore Saved State", ImVec2(-1, 0))) {
-                camera.restoreCurrentState();
+                if (look_at_view) {
+                    camera.restoreLookAtViewState();
+                    target_look_at = camera.look_at_view_state.target;
+                } else {
+                    camera.restoreNormalViewState();
+                }
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Restore saved state for %s mode",
-                                  camera.mode == CameraMode::LOOK_AT ? "Look-At" : "Model Transform");
+                                  look_at_view ? "Look-At" : "Normal View");
             }
 
             ImGui::Spacing();
@@ -1003,24 +974,18 @@ namespace {
             ImGui::Text("  X: %.2f  Y: %.2f  Z: %.2f",
                         camera.position.x, camera.position.y, camera.position.z);
 
-            ImGui::Spacing();
-
-            if (camera.mode == CameraMode::LOOK_AT) {
-                ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "Look-At Mode");
-                ImGui::Text("  Yaw:   %.1f°", camera.yaw);
-                ImGui::Text("  Pitch: %.1f°", camera.pitch);
-            } else {
-                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "Model Transform Mode");
-                ImGui::Text("  Yaw:   %.1f°", camera.model_yaw);
-                ImGui::Text("  Pitch: %.1f°", camera.model_pitch);
-                ImGui::SliderFloat("Roll", &camera.model_roll, -180.0f, 180.0f, "%.1f°");
+            if (!look_at_view) {
+                ImGui::Text("Rotation (radians):");
+                ImGui::Text("  X: %.3f  Y: %.3f  Z: %.3f",
+                            camera.rotation.x, camera.rotation.y, camera.rotation.z);
             }
+
+            ImGui::Spacing();
         }
 
         // СЕКЦИЯ ОСВЕЩЕНИЯ
         if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::ColorEdit3("Ambient", &ambient_light.x);
-
             ImGui::Spacing();
             ImGui::Text("Directional (Sun):");
             ImGui::DragFloat3("Direction", &sun_direction.x, 0.01f, -1.0f, 1.0f);
@@ -1042,12 +1007,11 @@ namespace {
             }
         }
 
-        //  СЕКЦИЯ ПРОЖЕКТОРНЫХ ИСТОЧНИКОВ
+        // СЕКЦИЯ ПРОЖЕКТОРНЫХ ИСТОЧНИКОВ
         if (ImGui::CollapsingHeader("Spot Lights")) {
             for (size_t i = 0; i < spot_lights.size(); ++i) {
-                ImGui::PushID(static_cast<int>(i) + 1000); // смещение ID
+                ImGui::PushID(static_cast<int>(i) + 1000);
                 if (ImGui::TreeNode("##spotlight", "Spot Light %zu", i)) {
-
                     ImGui::DragFloat3("Position", &spot_lights[i].position.x, 0.1f);
                     ImGui::DragFloat3("Direction", &spot_lights[i].direction.x, 0.01f, -1.0f, 1.0f);
                     spot_lights[i].direction = veekay::vec3::normalized(spot_lights[i].direction);
@@ -1055,6 +1019,7 @@ namespace {
                     const float MIN_ANGLE_DIFF = 3.0f;
                     float inner_deg = std::acos(spot_lights[i].cutoff_angle) * 180.0f / M_PI;
                     float outer_deg = std::acos(spot_lights[i].outer_cutoff_angle) * 180.0f / M_PI;
+
                     if (ImGui::SliderFloat("Inner Angle", &inner_deg, 5.0f, 45.0f)) {
                         if (outer_deg - inner_deg < MIN_ANGLE_DIFF) {
                             outer_deg = inner_deg + MIN_ANGLE_DIFF;
@@ -1089,7 +1054,73 @@ namespace {
 
         ImGui::End();
 
-        // Обновление буферов
+        // УПРАВЛЕНИЕ КАМЕРОЙ
+        ImGuiIO &io = ImGui::GetIO();
+        if (!io.WantCaptureMouse && !io.WantCaptureKeyboard) {
+            using namespace veekay::input;
+
+            if (mouse::isButtonDown(mouse::Button::left)) {
+                auto move_delta = mouse::cursorDelta();
+                camera.rotation.x += move_delta.y / 360.0f;
+                camera.rotation.y += -move_delta.x / 360.0f;
+                camera.rotation.x = std::clamp(camera.rotation.x, -static_cast<float>(M_PI) / 2,
+                                               static_cast<float>(M_PI) / 2);
+            }
+
+            auto view = look_at_view ? camera.look_at(target_look_at) : camera.view();
+            veekay::vec3 right = veekay::vec3::normalized({view[0][0], view[1][0], view[2][0]});
+            veekay::vec3 up = veekay::vec3::normalized({view[0][1], view[1][1], view[2][1]});
+            veekay::vec3 front = veekay::vec3::normalized({view[0][2], view[1][2], view[2][2]});
+
+            if (keyboard::isKeyDown(keyboard::Key::w))
+                camera.position += front * 0.1f;
+            if (keyboard::isKeyDown(keyboard::Key::s))
+                camera.position -= front * 0.1f;
+            if (keyboard::isKeyDown(keyboard::Key::d))
+                camera.position += right * 0.1f;
+            if (keyboard::isKeyDown(keyboard::Key::a))
+                camera.position -= right * 0.1f;
+            if (keyboard::isKeyDown(keyboard::Key::q))
+                camera.position += up * 0.1f;
+            if (keyboard::isKeyDown(keyboard::Key::z))
+                camera.position -= up * 0.1f;
+        }
+
+        veekay::mat4 matrix_view;
+        if (!look_at_view)
+            matrix_view = camera.view();
+        else
+            matrix_view = camera.look_at(target_look_at);
+
+        const float aspect_ratio =
+                static_cast<float>(veekay::app.window_width) / static_cast<float>(veekay::app.window_height);
+
+        SceneUniforms scene_uniforms{
+                .view_projection = camera.view_projection(aspect_ratio, matrix_view),
+                .view_position = camera.position,
+                .ambient_light_intensity = ambient_light,
+                .sun_light_direction = sun_direction,
+                .sun_light_color = sun_color,
+        };
+
+        std::vector<ModelUniforms> model_uniforms(models.size());
+        for (size_t i = 0, n = models.size(); i < n; ++i) {
+            const Model &model = models[i];
+            ModelUniforms &uniforms = model_uniforms[i];
+            uniforms.model = model.transform.matrix();
+            uniforms.albedo_color = model.material.albedo_color;
+            uniforms.specular_color = model.material.specular_color;
+            uniforms.shininess = model.material.shininess;
+        }
+
+        *(SceneUniforms *) scene_uniforms_buffer->mapped_region = scene_uniforms;
+
+        uint8_t *base = static_cast<uint8_t *>(model_uniforms_buffer->mapped_region);
+        for (size_t i = 0, n = model_uniforms.size(); i < n; ++i) {
+            std::memcpy(base + i * g_model_stride, &model_uniforms[i], sizeof(ModelUniforms));
+        }
+
+        // Обновляем буферы освещения
         {
             uint8_t *mapped = static_cast<uint8_t *>(point_lights_buffer->mapped_region);
             PointLightBufferHeader header{
@@ -1112,119 +1143,6 @@ namespace {
             std::memcpy(spot_mapped, &spot_header, spot_header_size);
             std::memcpy(spot_mapped + spot_header_size, spot_lights.data(),
                         spot_lights.size() * sizeof(SpotLight));
-        }
-
-        // УПРАВЛЕНИЕ КАМЕРОЙ
-        ImGuiIO &io = ImGui::GetIO();
-        if (!io.WantCaptureMouse && !io.WantCaptureKeyboard) {
-
-            using namespace veekay::input;
-            if (mouse::isButtonDown(mouse::Button::left)) {
-                auto move_delta = mouse::cursorDelta();
-                const float sensitivity = 0.1f;
-                if (camera.mode == CameraMode::LOOK_AT) {
-                    camera.yaw += move_delta.x * sensitivity;
-                    camera.pitch -= move_delta.y * sensitivity;
-                    camera.pitch = clampf(camera.pitch, -89.0f, 89.0f);
-                } else {
-                    camera.model_yaw += move_delta.x * sensitivity;
-                    camera.model_pitch -= move_delta.y * sensitivity;
-                    camera.model_pitch = clampf(camera.model_pitch, -89.0f, 89.0f);
-                }
-            }
-
-            // Вычисляем направления камеры
-            veekay::vec3 front, right, up;
-            veekay::vec3 worldUp = {0.0f, 1.0f, 0.0f};
-
-            if (camera.mode == CameraMode::LOOK_AT) {
-                float cy = cosf(toRadians(camera.yaw));
-                float sy = sinf(toRadians(camera.yaw));
-                float cp = cosf(toRadians(camera.pitch));
-                float sp = sinf(toRadians(camera.pitch));
-                front = veekay::vec3::normalized({cy * cp, sp, sy * cp});
-                right = veekay::vec3::normalized(veekay::vec3::cross(front, worldUp));
-                up = veekay::vec3::normalized(veekay::vec3::cross(right, front));
-            } else {
-                auto ry = veekay::mat4::rotation({0.0f, 1.0f, 0.0f}, toRadians(camera.model_yaw));
-                auto rx = veekay::mat4::rotation({1.0f, 0.0f, 0.0f}, toRadians(camera.model_pitch));
-                auto rz = veekay::mat4::rotation({0.0f, 0.0f, 1.0f}, toRadians(camera.model_roll));
-                auto rotation = ry * rx * rz;
-
-                right = veekay::vec3::normalized(veekay::vec3{
-                        rotation[0].x,
-                        rotation[0].y,
-                        rotation[0].z
-                });
-
-                up = veekay::vec3::normalized(veekay::vec3{
-                        rotation[1].x,
-                        rotation[1].y,
-                        rotation[1].z
-                });
-
-                front = veekay::vec3::normalized(veekay::vec3{
-                        -rotation[2].x,
-                        -rotation[2].y,
-                        -rotation[2].z
-                });
-            }
-
-            const float speed = 0.1f;
-            if (camera.mode == CameraMode::LOOK_AT) {
-
-                if (keyboard::isKeyDown(keyboard::Key::w))
-                    camera.position -= front * speed;
-                if (keyboard::isKeyDown(keyboard::Key::s))
-                    camera.position += front * speed;
-                if (keyboard::isKeyDown(keyboard::Key::a))
-                    camera.position -= right * speed;
-                if (keyboard::isKeyDown(keyboard::Key::d))
-                    camera.position += right * speed;
-                if (keyboard::isKeyDown(keyboard::Key::q))
-                    camera.position -= up * speed;
-                if (keyboard::isKeyDown(keyboard::Key::z))
-                    camera.position += up * speed;
-            } else {
-                if (keyboard::isKeyDown(keyboard::Key::w))
-                    camera.position -= front * speed;
-                if (keyboard::isKeyDown(keyboard::Key::s))
-                    camera.position += front * speed;
-                if (keyboard::isKeyDown(keyboard::Key::a))
-                    camera.position -= right * speed;
-                if (keyboard::isKeyDown(keyboard::Key::d))
-                    camera.position += right * speed;
-                if (keyboard::isKeyDown(keyboard::Key::q))
-                    camera.position -= up * speed;
-                if (keyboard::isKeyDown(keyboard::Key::z))
-                    camera.position += up * speed;
-            }
-        }
-
-        float aspect_ratio = float(veekay::app.window_width) / float(veekay::app.window_height);
-
-        SceneUniforms scene_uniforms{
-                .view_projection = camera.view_projection(aspect_ratio),
-                .view_position = camera.position,
-                .ambient_light_intensity = ambient_light,
-                .sun_light_direction = sun_direction,
-                .sun_light_color = sun_color,
-        };
-
-        std::vector<ModelUniforms> model_uniforms(models.size());
-        for (size_t i = 0, n = models.size(); i < n; ++i) {
-            const Model &model = models[i];
-            ModelUniforms &uniforms = model_uniforms[i];
-            uniforms.model = model.transform.matrix();
-            uniforms.albedo_color = model.material.albedo_color;
-            uniforms.specular_color = model.material.specular_color;
-            uniforms.shininess = model.material.shininess;
-        }
-
-        *(SceneUniforms *) scene_uniforms_buffer->mapped_region = scene_uniforms;
-        uint8_t *base = static_cast<uint8_t *>(model_uniforms_buffer->mapped_region);
-        for (size_t i = 0, n = model_uniforms.size(); i < n; ++i) {
-            std::memcpy(base + i * g_model_stride, &model_uniforms[i], sizeof(ModelUniforms));
         }
     }
 
@@ -1273,6 +1191,7 @@ namespace {
                 current_vertex_buffer = mesh.vertex_buffer->buffer;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &current_vertex_buffer, &zero_offset);
             }
+
             if (current_index_buffer != mesh.index_buffer->buffer) {
                 current_index_buffer = mesh.index_buffer->buffer;
                 vkCmdBindIndexBuffer(cmd, current_index_buffer, zero_offset, VK_INDEX_TYPE_UINT32);
