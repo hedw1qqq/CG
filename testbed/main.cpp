@@ -640,8 +640,8 @@ namespace {
         // Создание storage buffer для прожекторных источников света
         {
             spot_lights.push_back(SpotLight{
-                .position = {0.0f, 2.0f, 0.0f},
-                .direction = veekay::vec3::normalized({0.0f, -1.0f, 0.0f}),
+                .position = {0.0f, -2.0f, 0.0f},
+                .direction = veekay::vec3::normalized({0.0f, 1.0f, 0.0f}),
                 .cutoff_angle = std::cos(toRadians(12.5f)),
                 .color = {1.0f, 1.0f, 1.0f},
                 .outer_cutoff_angle = std::cos(toRadians(17.5f)),
