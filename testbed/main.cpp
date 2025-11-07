@@ -9,6 +9,7 @@
 #include "veekay/graphics.hpp"
 #include "veekay/veekay.hpp"
 #include "imgui.h"
+#include "lodepng.h"
 
 namespace {
     constexpr uint32_t max_models = 1024;
@@ -468,6 +469,10 @@ namespace {
                         .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                         .descriptorCount = 8,
                     },
+                    {
+                        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        .descriptorCount = 8,
+                    },
                 };
                 VkDescriptorPoolCreateInfo info{
                     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -507,6 +512,12 @@ namespace {
                     {
                         .binding = 3,
                         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .descriptorCount = 1,
+                        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                    },
+                    {
+                        .binding = 4,
+                        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                         .descriptorCount = 1,
                         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                     },
@@ -693,6 +704,36 @@ namespace {
                                                             VK_FORMAT_B8G8R8A8_UNORM,
                                                             pixels);
         } {
+            VkSamplerCreateInfo texture_info{
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .magFilter = VK_FILTER_LINEAR, // Фильтрация если плотность текселей меньше
+                .minFilter = VK_FILTER_LINEAR, // Фильтрация если плотность больше
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, // Фильтрация мип-мапов
+                // Что делать, если по какой-то из осей вышли за границы текстурных коорд-т
+                .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                .anisotropyEnable = true, // Включить анизотропную фильтрацию?
+                .maxAnisotropy = 16.0f, // Кол-во сэмплов анизотропной фильтрации
+                .minLod = 0.0f, // Минимальный уровень мипа
+                .maxLod = VK_LOD_CLAMP_NONE, // Максимальный уровень мипа (тут бескоченость)
+            };
+
+            if (vkCreateSampler(device, &texture_info, nullptr, &texture_sampler) != VK_SUCCESS) {
+                std::cerr << "Failed to create Vulkan texture sampler\n";
+                veekay::app.running = false;
+                return;
+            }
+            uint32_t width, height;
+            std::vector<uint8_t> pixels;
+            lodepng::decode(pixels, width, height, "./assets/11.png");
+
+            // Создаем текстуру с данными об изображении
+            texture = new veekay::graphics::Texture(
+                cmd, width, height,
+                VK_FORMAT_R8G8B8A8_UNORM, // 8 бит на каждый канал цвета
+                pixels.data());
+        } {
             VkDescriptorBufferInfo buffer_infos[] = {
                 {
                     .buffer = scene_uniforms_buffer->buffer,
@@ -713,6 +754,14 @@ namespace {
                     .buffer = spot_lights_buffer->buffer,
                     .offset = 0,
                     .range = VK_WHOLE_SIZE,
+                },
+            };
+            VkDescriptorImageInfo image_infos[] = {
+                {
+                    .sampler = texture_sampler, // Какой сэмплер будет использоваться
+                    .imageView = texture->view, // Какая текстура будет использоваться
+                    // Формат текстуры будет использован оптимальный для чтения в шейдере
+                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 },
             };
 
@@ -752,6 +801,15 @@ namespace {
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                     .pBufferInfo = &buffer_infos[3],
+                },
+                {
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = descriptor_set,
+                    .dstBinding = 4,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &image_infos[0],
                 },
             };
 
@@ -837,7 +895,7 @@ namespace {
                 .mesh = plane_mesh,
                 .transform = Transform{},
                 .material = Material{
-                    .albedo_color = {0.8f, 0.8f, 0.8f},
+                    .albedo_color = {1, 1, 1},
                     .specular_color = {0.5f, 0.5f, 0.5f},
                     .shininess = 32.0f
                 }
@@ -848,7 +906,7 @@ namespace {
                     .position = {-2.0f, -0.5f, -1.5f},
                 },
                 .material = Material{
-                    .albedo_color = {1.0f, 0.0f, 0.0f},
+                    .albedo_color = {1, 1, 1},
                     .specular_color = {1.0f, 1.0f, 1.0f},
                     .shininess = 64.0f
                 }
@@ -859,7 +917,7 @@ namespace {
                     .position = {1.5f, -0.5f, -0.5f},
                 },
                 .material = Material{
-                    .albedo_color = {0.0f, 1.0f, 0.0f},
+                    .albedo_color = {1, 1, 1},
                     .specular_color = {1.0f, 1.0f, 1.0f},
                     .shininess = 64.0f
                 }
@@ -870,7 +928,7 @@ namespace {
                     .position = {0.0f, -0.5f, 1.0f},
                 },
                 .material = Material{
-                    .albedo_color = {0.0f, 0.0f, 1.0f},
+                    .albedo_color = {1, 1, 1},
                     .specular_color = {1.0f, 1.0f, 1.0f},
                     .shininess = 64.0f
                 }
@@ -883,6 +941,8 @@ namespace {
         VkDevice &device = veekay::app.vk_device;
         vkDestroySampler(device, missing_texture_sampler, nullptr);
         delete missing_texture;
+        vkDestroySampler(device, texture_sampler, nullptr);
+        delete texture;
         delete cube_mesh.index_buffer;
         delete cube_mesh.vertex_buffer;
         delete plane_mesh.index_buffer;

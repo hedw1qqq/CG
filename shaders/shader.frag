@@ -61,13 +61,14 @@ layout(binding = 3, std430) readonly buffer SpotLights {
     uint _padF;
     SpotLight spot_lights[];
 };
+layout (binding = 4) uniform sampler2D albedo_texture;
 
-vec3 calculateDirectionalLight(vec3 normal, vec3 view_dir) {
+vec3 calculateDirectionalLight(vec3 albedo, vec3 normal, vec3 view_dir) {
     vec3 light_dir = normalize(-sun_light_direction);
 
     // Диффузная компонента
     float diff = max(dot(normal, light_dir), 0.0);
-    vec3 diffuse = diff * albedo_color * sun_light_color;
+    vec3 diffuse = diff * albedo * sun_light_color;
 
     // Specular компонента (Блинн-Фонг)
     vec3 halfway_dir = normalize(light_dir + view_dir);
@@ -77,7 +78,7 @@ vec3 calculateDirectionalLight(vec3 normal, vec3 view_dir) {
     return diffuse + specular;
 }
 
-vec3 calculatePointLight(PointLight light, vec3 normal, vec3 frag_pos, vec3 view_dir) {
+vec3 calculatePointLight(PointLight light, vec3 albedo, vec3 normal, vec3 frag_pos, vec3 view_dir) {
     vec3 light_dir = normalize(light.position - frag_pos);
     float distance = length(light.position - frag_pos);
 
@@ -86,7 +87,7 @@ vec3 calculatePointLight(PointLight light, vec3 normal, vec3 frag_pos, vec3 view
 
     // Диффузная компонента
     float diff = max(dot(normal, light_dir), 0.0);
-    vec3 diffuse = diff * albedo_color * light.color;
+    vec3 diffuse = diff * albedo * light.color;
 
     // Specular компонента (Блинн-Фонг)
     vec3 halfway_dir = normalize(light_dir + view_dir);
@@ -96,7 +97,7 @@ vec3 calculatePointLight(PointLight light, vec3 normal, vec3 frag_pos, vec3 view
     return (diffuse + specular) * attenuation;
 }
 
-vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 frag_pos, vec3 view_dir) {
+vec3 calculateSpotLight(SpotLight light, vec3 albedo, vec3 normal, vec3 frag_pos, vec3 view_dir) {
     vec3 light_dir = normalize(light.position - frag_pos);
     float distance = length(light.position - frag_pos);
 
@@ -112,7 +113,7 @@ vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 frag_pos, vec3 view_d
 
     // Диффузная компонента
     float diff = max(dot(normal, light_dir), 0.0);
-    vec3 diffuse = diff * albedo_color * light.color;
+    vec3 diffuse = diff * albedo * light.color;
 
     // Specular компонента (Блинн-Фонг)
     vec3 halfway_dir = normalize(light_dir + view_dir);
@@ -126,22 +127,26 @@ void main() {
     vec3 normal = normalize(f_normal);
     vec3 view_dir = normalize(view_position - f_position);
 
-    vec3 ambient = ambient_light_intensity * albedo_color;
+    vec3 tex = texture(albedo_texture, f_uv).rgb;
+    vec3 albedo = albedo_color * tex;
+
+    vec3 ambient = ambient_light_intensity * albedo;
 
     // sun
-    vec3 directional = calculateDirectionalLight(normal, view_dir);
+    vec3 directional = calculateDirectionalLight(albedo, normal, view_dir);
 
     vec3 point_lighting = vec3(0.0);
     for (uint i = 0; i < point_light_count; ++i) {
-        point_lighting += calculatePointLight(point_lights[i], normal, f_position, view_dir);
+        point_lighting += calculatePointLight(point_lights[i], albedo, normal, f_position, view_dir);
     }
 
     vec3 spot_lighting = vec3(0.0);
     for (uint i = 0; i < spot_light_count; ++i) {
-        spot_lighting += calculateSpotLight(spot_lights[i], normal, f_position, view_dir);
+        spot_lighting += calculateSpotLight(spot_lights[i], albedo, normal, f_position, view_dir);
     }
 
     vec3 color = ambient + directional + point_lighting + spot_lighting;
-    color = pow(color, vec3(1.0/2.2));  // Gamma correction
+    color = pow(color, vec3(1.0/2.2));// Gamma correction
     final_color = vec4(color, 1.0);
+
 }
