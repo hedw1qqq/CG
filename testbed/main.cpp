@@ -102,15 +102,9 @@ namespace {
         float _pad3;
     };
 
-    // Базовая структура материала (цвета/блеск)
-    struct Material {
-        veekay::vec3 albedo_color;
-        veekay::vec3 specular_color;
-        float shininess;
-    };
 
     // материал для текстур и набора дескрипторов
-    struct MaterialEx {
+    struct Material {
         veekay::vec3 albedo_color;
         veekay::vec3 specular_color;
         float shininess;
@@ -126,7 +120,7 @@ namespace {
     struct Model {
         Mesh mesh;
         Transform transform;
-        MaterialEx material;
+        Material material;
     };
 
     struct Camera {
@@ -236,7 +230,6 @@ namespace {
 
     static inline float toRadians(float degrees) { return degrees * float(M_PI) / 180.0f; }
 
-    static inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
     veekay::mat4 mat4_inverse_rigid(const veekay::mat4 &m) {
         veekay::mat4 result = veekay::mat4::identity();
@@ -322,14 +315,15 @@ namespace {
                           float maxAniso = 16.0f) {
         VkSamplerCreateInfo sinfo{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-            .magFilter = fmag,
-            .minFilter = fmin,
-            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .magFilter = fmag, // Фильтрация если плотность текселей меньше
+            .minFilter = fmin, // Фильтрация если плотность больше
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, // Фильтрация мип-мапов
+            // Что делать, если по какой-то из осей вышли за границы текстурных коорд-т
             .addressModeU = addr, .addressModeV = addr, .addressModeW = addr,
-            .anisotropyEnable = VK_TRUE,
-            .maxAnisotropy = maxAniso,
-            .minLod = 0.0f,
-            .maxLod = VK_LOD_CLAMP_NONE,
+            .anisotropyEnable = VK_TRUE, // Включить анизотропную фильтрацию?
+            .maxAnisotropy = maxAniso, // Кол-во сэмплов анизотропной фильтрации
+            .minLod = 0.0f, // Минимальный уровень мипа
+            .maxLod = VK_LOD_CLAMP_NONE, // Максимальный уровень мипа
         };
         VkSampler s{};
         if (vkCreateSampler(device, &sinfo, nullptr, &s) != VK_SUCCESS) {
@@ -771,7 +765,7 @@ namespace {
             models.emplace_back(Model{
                 .mesh = plane_mesh,
                 .transform = Transform{},
-                .material = MaterialEx{
+                .material = Material{
                     .albedo_color = {1, 1, 1},
                     .specular_color = {0.5f, 0.5f, 0.5f},
                     .shininess = 32.0f
@@ -780,7 +774,7 @@ namespace {
             models.emplace_back(Model{
                 .mesh = cube_mesh,
                 .transform = Transform{.position = {-2.0f, -0.5f, -1.5f}},
-                .material = MaterialEx{
+                .material = Material{
                     .albedo_color = {1, 1, 1},
                     .specular_color = {1.0f, 1.0f, 1.0f},
                     .shininess = 64.0f
@@ -789,7 +783,7 @@ namespace {
             models.emplace_back(Model{
                 .mesh = cube_mesh,
                 .transform = Transform{.position = {1.5f, -0.5f, -0.5f}},
-                .material = MaterialEx{
+                .material = Material{
                     .albedo_color = {1, 1, 1},
                     .specular_color = {1.0f, 1.0f, 1.0f},
                     .shininess = 64.0f
@@ -798,7 +792,7 @@ namespace {
             models.emplace_back(Model{
                 .mesh = cube_mesh,
                 .transform = Transform{.position = {0.0f, -0.5f, 1.0f}},
-                .material = MaterialEx{
+                .material = Material{
                     .albedo_color = {1, 1, 1},
                     .specular_color = {1.0f, 1.0f, 1.0f},
                     .shininess = 64.0f
@@ -875,9 +869,9 @@ namespace {
                     return new veekay::graphics::Texture(cmd, w, h, VK_FORMAT_R8G8B8A8_UNORM, pixels.data());
                 };
 
-                try { M.albedo = load_png("./assets/img_1.png"); } catch (...) { M.albedo = missing_texture; }
-                try { M.specular = load_png("./assets/img.png"); } catch (...) { M.specular = g_white1x1; }
-                try { M.emissive = load_png("./assets/Hedron.png"); } catch (...) { M.emissive = g_black1x1; }
+                try { M.albedo = load_png("./assets/lenna.png"); } catch (...) { M.albedo = missing_texture; }
+                try { M.specular = load_png("./assets/zz.png"); } catch (...) { M.specular = g_white1x1; }
+                try { M.emissive = load_png("./assets/zzы.png"); } catch (...) { M.emissive = g_black1x1; }
 
                 // Per-material sampler
                 M.sampler = makeSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -1029,7 +1023,7 @@ namespace {
         }
     }
 
-    void update(double /*time*/) {
+    void update(double time) {
         ImGui::Begin("Scene Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
         // СЕКЦИЯ КАМЕРЫ

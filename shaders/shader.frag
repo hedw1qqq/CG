@@ -87,7 +87,6 @@ vec3 sampleAlbedoFancy(vec2 uv) {
     return (c0*0.6 + (c1+c2+c3+c4)*0.1);
 }
 
-// Сохранены ваши комментарии внутри функций, добавлен spec_mask параметр
 vec3 calculateDirectionalLight(vec3 albedo, vec3 normal, vec3 view_dir, float spec_mask) {
 
     vec3 light_dir = normalize(-sun_light_direction);
@@ -134,7 +133,7 @@ vec3 calculateSpotLight(SpotLight light, vec3 albedo, vec3 normal, vec3 frag_pos
     // Угол между направлением прожектора и вектором к фрагменту
     float theta = dot(light_dir, normalize(-light.direction));
 
-    // Плавное затухание по углу (smooth transition)
+    // Плавное затухание по углу
     float epsilon = light.cutoff_angle - light.outer_cutoff_angle;
     float intensity = clamp((theta - light.outer_cutoff_angle) / epsilon, 0.0, 1.0);
 
@@ -153,7 +152,7 @@ void main() {
     vec3 normal = normalize(f_normal);
     vec3 view_dir = normalize(view_position - f_position);
 
-    // albedo теперь берём с нетривиальным сэмплингом
+    // albedo берём с нетривиальным сэмплингом
     vec3 tex = sampleAlbedoFancy(f_uv);
     vec3 albedo = albedo_color * tex;
 
@@ -175,7 +174,7 @@ void main() {
         spot_lighting += calculateSpotLight(spot_lights[i], albedo, normal, f_position, view_dir, spec_mask);
     }
 
-    // Emissive добавляется напрямую, игнорируя затенение
+    // игнорируем затенениея для emissive
     vec3 emissive = texture(emissive_texture, f_uv).rgb * 0.1;
 
     vec3 color = ambient + directional + point_lighting + spot_lighting + emissive;
