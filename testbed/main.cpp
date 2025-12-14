@@ -509,7 +509,7 @@ namespace {
         vkCmdEndRenderingKHR = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
             vkGetDeviceProcAddr(device, "vkCmdEndRenderingKHR"));
 
-        // 1. Сначала получаем свойства устройства и вычисляем выравнивание
+        // Сначала получаем свойства устройства и вычисляем выравнивание
         {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(physical_device, &props);
@@ -535,7 +535,7 @@ namespace {
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         }
 
-        // 2. Создаем основные текстуры
+        //  Создаем основные текстуры
         {
             g_black1x1 = makeSolidTexture(cmd, 0xff000000u);
             g_white1x1 = makeSolidTexture(cmd, 0xffffffffu);
@@ -554,7 +554,7 @@ namespace {
             missing_texture = new veekay::graphics::Texture(cmd, 16, 16, VK_FORMAT_R8G8B8A8_UNORM, pixels.data());
         }
 
-        // 3. Создаем основной графический конвейер
+        //  Создаем основной графический конвейер
         {
             vertex_shader_module = loadShaderModule("./shaders/shader.vert.spv");
             if (!vertex_shader_module) {
@@ -825,7 +825,7 @@ namespace {
             }
         }
 
-        // 4. Инициализация shadow mapping
+        //  Инициализация shadow mapping
         {
             // Создаем изображение для карты теней
             shadow.size = 2048;
@@ -1116,6 +1116,8 @@ namespace {
                 .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
                 .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
                 .compareEnable = VK_TRUE,
+                // Операция: (Ref <= Texture) ? 1.0 : 0.0
+                // Если наша глубина меньше или равна глубине в карте, значит мы освещены
                 .compareOp = VK_COMPARE_OP_LESS,
                 .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
             };
@@ -1160,7 +1162,7 @@ namespace {
             vkUpdateDescriptorSets(device, 2, write_infos, 0, nullptr);
         }
 
-        // 5. Создаем основной глобальный descriptor set
+        //  Создаем основной глобальный descriptor set
         {
             VkDescriptorSetAllocateInfo info{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -1175,7 +1177,7 @@ namespace {
             }
         }
 
-        // 6. Добавляем текстуру теней к основным дескрипторам
+        //  Добавляем текстуру теней к основным дескрипторам
         {
             VkDescriptorImageInfo shadow_image_info{
                 .sampler = shadow.sampler,
@@ -1196,7 +1198,7 @@ namespace {
             vkUpdateDescriptorSets(device, 1, &shadow_write, 0, nullptr);
         }
 
-        // 7. Создаем меши
+        //  Создаем меши
         // NOTE: Plane mesh initialization
         {
             std::vector<Vertex> vertices = {
@@ -1312,7 +1314,7 @@ namespace {
             sphere_mesh.indices = uint32_t(sphere_indices.size());
         }
 
-        // 8. Добавляем источники света
+        //  Добавляем источники света
         // NOTE: Добавляем точечные источники света
         point_lights.emplace_back(PointLight{
             .position = {0.0f, 2.0f, 0.0f},
@@ -1370,7 +1372,7 @@ namespace {
             .color = {1.0f, 1.0f, 0.5f},
         });
 
-        // 9. Добавляем модели в сцену с материалами
+        //  Добавляем модели в сцену с материалами
         models.clear();
         // 0: Пол
         models.emplace_back(Model{
@@ -1383,29 +1385,29 @@ namespace {
             }
         });
 
-        // 1: Стоящий Куб
+        //  Стоящий Куб
         models.emplace_back(Model{
             .mesh = cube_mesh,
             .transform = Transform{.position = {-2.0f, -0.5f, -1.5f}},
             .material = Material{
-                .albedo_color = {1.0f, 0.0f, 0.0f}, // Красный
+                .albedo_color = {1.f, 1.f, 1.f},
                 .specular_color = {1.0f, 1.0f, 1.0f},
                 .shininess = 64.0f
             }
         });
 
-        // 2: Сфера над полом
+        //: Сфера над полом
         models.emplace_back(Model{
             .mesh = sphere_mesh,
             .transform = Transform{.position = {0.f, -2.0f, 0.0f}}, // Справа и выше пола
             .material = Material{
-                .albedo_color = {0.0f, 1.0f, 0.0f}, // Зеленая
+                .albedo_color = {1.f, 1.f, 1.f},
                 .specular_color = {1.0f, 1.0f, 1.0f},
                 .shininess = 128.0f
             }
         });
 
-        // 10. Создаем descriptor sets для материалов
+        //  Создаем descriptor sets для материалов
         {
             descriptor_sets_material.resize(models.size());
             if (!models.empty()) {
@@ -1427,7 +1429,7 @@ namespace {
             }
         }
 
-        // 11. Загружаем текстуры для материалов и настраиваем дескрипторы
+        //  Загружаем текстуры для материалов и настраиваем дескрипторы
         {
             auto load_png = [&](const char *path) -> veekay::graphics::Texture * {
                 uint32_t w = 0, h = 0;
@@ -1510,7 +1512,7 @@ namespace {
             }
         }
 
-        // 12. Обновляем глобальные дескрипторы (uniform буферы и storage буферы)
+        //  Обновляем глобальные дескрипторы (uniform буферы и storage буферы)
         {
             VkDescriptorBufferInfo buffer_infos[] = {
                 {
@@ -1643,7 +1645,7 @@ namespace {
 
             models[2].transform.rotation.y = time * 90.0f;
         }
-        // 2. Отрисовка GUI с вкладками
+        // Отрисовка GUI с вкладками
         ImGui::Begin("Settings"); // Создаем главное окно настроек
 
         if (ImGui::BeginTabBar("MainTabs")) {
@@ -1725,7 +1727,7 @@ namespace {
         }
         ImGui::End();
 
-        // 3. Обработка ввода (камера)
+        //  Обработка ввода (камера)
         ImGuiIO &io = ImGui::GetIO();
         if (!io.WantCaptureMouse) {
             using namespace veekay::input;
@@ -1771,7 +1773,7 @@ namespace {
         if (veekay::input::keyboard::isKeyDown(veekay::input::keyboard::Key::q)) camera.position += up * move_speed;
         if (veekay::input::keyboard::isKeyDown(veekay::input::keyboard::Key::z)) camera.position -= up * move_speed;
 
-        // 4. Обновление юниформ-буферов
+        //  Обновление юниформ-буферов
         float aspect_ratio = float(veekay::app.window_width) / float(veekay::app.window_height);
         SceneUniforms scene_uniforms{
             .view_projection = camera.view_projection(aspect_ratio),
@@ -1860,9 +1862,9 @@ namespace {
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
                 .imageView = shadow.depth_image_view,
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue = clear_depth,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, // Очистить карту перед рисованием
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE, // Сохранить результат
+                .clearValue = clear_depth, // Очищаем значением 1.0 (макс. глубина)
             };
 
             VkRenderingInfoKHR rendering_info{
