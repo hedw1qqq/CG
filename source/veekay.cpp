@@ -19,8 +19,8 @@
 
 namespace {
 
-constexpr uint32_t window_default_width = 1280;
-constexpr uint32_t window_default_height = 720;
+constexpr uint32_t window_default_width = 1600;
+constexpr uint32_t window_default_height = 900;
 constexpr char window_title[] = "Veekay";
 
 constexpr uint32_t max_frames_in_flight = 2;
@@ -144,9 +144,17 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 			.samplerAnisotropy = true,
 		};
 
+		VkPhysicalDeviceDynamicRenderingFeaturesKHR dyn_rendering{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR,
+				.dynamicRendering = true,
+		};
+
 		auto selector_result = physical_device_selector.set_surface(vk_surface)
-		                                               .set_required_features(device_features)
-		                                               .select();
+				.set_required_features(device_features)
+				.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
+				.add_required_extension_features(dyn_rendering)
+				.select();
+
 		if (!selector_result) {
 			std::cerr << selector_result.error().message() << '\n';
 			return 1;
@@ -667,15 +675,16 @@ int veekay::run(const veekay::ApplicationInfo& app_info) {
 		app_info.update(time);
 
 		ImGui::Render();
-        uint32_t swapchain_image_index = 0;
+
 		// NOTE: Wait until the previous frame finishes
 		vkWaitForFences(vk_device, 1, &vk_in_flight_fences[vk_current_frame], true, UINT64_MAX);
-        vkAcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX,
-                              vk_render_semaphores[vk_current_frame],
-                              nullptr, &swapchain_image_index);
 		vkResetFences(vk_device, 1, &vk_in_flight_fences[vk_current_frame]);
 
 		// NOTE: Get current swapchain framebuffer index
+		uint32_t swapchain_image_index = 0;
+		vkAcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX,
+		                      vk_render_semaphores[vk_current_frame],
+		                      nullptr, &swapchain_image_index);
 
 		VkCommandBuffer cmd = vk_command_buffers[swapchain_image_index];
 

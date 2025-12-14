@@ -4,6 +4,7 @@
 
 namespace veekay::graphics {
 
+
 struct Buffer {
 	VkBuffer buffer;
 	VkDeviceMemory memory;

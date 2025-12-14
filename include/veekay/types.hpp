@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <cmath>
-#define M_PI 3.1415926535897932384626433832795
+
+#define M_PI 3.14
+
 namespace veekay {
 
 union vec2 {
@@ -329,7 +331,7 @@ union mat4 {
 		result[1][1] = 1.0f;
 		result[2][2] = 1.0f;
 		result[3][3] = 1.0f;
-		
+
 		return result;
 	}
 
@@ -343,6 +345,16 @@ union mat4 {
 		return result;
 	}
 
+	static mat4 inverse_translation (vec3 vector) {
+		mat4 result = mat4::identity();
+
+		result[3][0] = -vector.x;
+		result[3][1] = -vector.y;
+		result[3][2] = -vector.z;
+
+		return result;
+	};
+
 	static mat4 scaling(vec3 vector) {
 		mat4 result{};
 
@@ -354,7 +366,18 @@ union mat4 {
 		return result;
 	}
 
-	static mat4 rotation(vec3 axis, float angle) {
+	static mat4 inverse_scaling(vec3 vector) {
+		mat4 result{};
+
+		result[0][0] = 1 / vector.x;
+		result[1][1] = 1 / vector.y;
+		result[2][2] = 1 / vector.z;
+		result[3][3] = 1.0f;
+
+		return result;
+	}
+
+	static mat4 rotation(vec3 axis, float angle	) {
 		mat4 result{};
 
 		float length = sqrtf(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
@@ -384,6 +407,11 @@ union mat4 {
 		return result;
 	}
 
+
+	static mat4 inverse_rotation(vec3 axis, float angle) {
+		return transpose(rotation(axis, angle));
+	}
+
 	static mat4 projection(float fov, float aspect_ratio, float near, float far) {
 		mat4 result{};
 
@@ -399,6 +427,7 @@ union mat4 {
 
 		return result;
 	}
+
 
 	static mat4 transpose(const mat4& matrix) {
 		mat4 result{};
@@ -422,6 +451,48 @@ union mat4 {
 				}
 			}
 		}
+
+		return result;
+	}
+
+	static mat4 lookAt(vec3 eye, vec3 target) {
+		// vec3 f = vec3::normalized(center - eye);
+		// vec3 s = vec3::normalized(vec3::cross(f, up));
+		// vec3 u = vec3::cross(s, f);
+		//
+		// mat4 result = identity();
+
+		const vec3 forward = vec3::normalized(eye - target);
+
+		vec3 world_up = {0, 1, 0};
+
+		vec3 right = vec3::normalized(vec3::cross(forward, world_up));
+
+		vec3 up = vec3::normalized(vec3::cross(right, forward));
+
+		const mat4 basis = {
+				right.x, up.x, -forward.x, 0,
+				right.y, up.y, -forward.y, 0,
+				right.z, up.z, -forward.z, 0,
+				0, 0, 0, 1
+		};
+
+		return translation(-eye) * basis;
+	}
+
+
+
+	static mat4 ortho(float left, float right, float bottom, float top, float near, float far) {
+		mat4 result = identity();
+
+		result[0][0] = 2.0f / (right - left);
+		result[1][1] = 2.0f / (top - bottom);
+
+		result[2][2] = 1.0f / (far - near);
+		result[3][2] = -near / (far - near);
+
+		result[3][0] = -(right + left) / (right - left);
+		result[3][1] = -(top + bottom) / (top - bottom);
 
 		return result;
 	}
