@@ -105,7 +105,6 @@ void main() {
     vec3 albedo = albedo_color * albedo_tex;
     vec3 emissive = emissive_tex * 0.1;
 
-    // Вычисляем тень (исправлено имя переменной)
     float shadow = calculateShadow(f_shadow_position);
 
     vec3 total_light = ambient_light_intensity * albedo + emissive;

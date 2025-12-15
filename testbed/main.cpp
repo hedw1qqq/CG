@@ -173,8 +173,8 @@ namespace {
         VkDeviceMemory depth_image_memory;
         VkImageView depth_image_view;
 
-        VkFramebuffer framebuffer; // Добавляем framebuffer
-        VkRenderPass render_pass; // Добавляем render pass
+        VkFramebuffer framebuffer;
+        VkRenderPass render_pass;
 
         VkShaderModule vertex_shader; // Простой шейдер для трансформации геометрии
 
@@ -1877,7 +1877,6 @@ namespace {
                 .pStencilAttachment = nullptr,
             };
 
-            // Начинаем динамический рендеринг с использованием KHR функции
             vkCmdBeginRenderingKHR(cmd, &rendering_info);
 
             // Устанавливаем viewport и scissor
